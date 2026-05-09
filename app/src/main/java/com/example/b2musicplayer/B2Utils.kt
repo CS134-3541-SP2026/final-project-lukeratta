@@ -164,6 +164,43 @@ object B2Utils {
         }
     }
 
+    suspend fun getAlbumArtworkUrl(
+        bucketId: String,
+        bucketName: String,
+        albumPrefix: String
+    ): String? {
+        Log.d("B2_DEBUG", "Fetching artwork for prefix: '$albumPrefix'")
+
+        val pngPath = "${albumPrefix}cover.png"
+        val pngUrl = getDownloadUrl(bucketName, pngPath)
+        if (downloadUrlExists(pngUrl)) {
+            return pngUrl
+        }
+
+        val jpgPath = "${albumPrefix}cover.jpg"
+        return getDownloadUrl(bucketName, jpgPath)
+    }
+
+    private suspend fun downloadUrlExists(url: String): Boolean {
+        return withContext(Dispatchers.IO) {
+            val connection = URL(url).openConnection() as HttpURLConnection
+            try {
+                connection.connectTimeout = 10_000
+                connection.readTimeout = 10_000
+                connection.instanceFollowRedirects = true
+                connection.setRequestProperty("Range", "bytes=0-0")
+
+                val responseCode = connection.responseCode
+                responseCode in 200..299
+            } catch (e: Exception) {
+                Log.d("B2_DEBUG", "Artwork probe failed: ${e.message}")
+                false
+            } finally {
+                connection.disconnect()
+            }
+        }
+    }
+
     /**
      * Constructs a download URL for a file in a public/private bucket.
      * For private buckets, the authToken can be appended as a query parameter.
