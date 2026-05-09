@@ -1,6 +1,7 @@
 package com.example.b2musicplayer
 
 import android.media.MediaMetadataRetriever
+import android.util.Base64
 import android.util.Log
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
@@ -11,7 +12,6 @@ import io.ktor.serialization.kotlinx.json.*
 import io.ktor.http.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import io.ktor.util.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.annotation.OptIn
@@ -63,7 +63,10 @@ object B2Utils {
             ) {
                 header(
                     HttpHeaders.Authorization,
-                    "Basic " + "$keyId:$appKey".toByteArray().encodeBase64()
+                    "Basic " + Base64.encodeToString(
+                        "$keyId:$appKey".toByteArray(),
+                        Base64.NO_WRAP
+                    )
                 )
             }.body()
 
@@ -151,7 +154,7 @@ object B2Utils {
                     val fileName = b2File.fileName.substringAfterLast("/")
                     val titleWithoutExtension = fileName.removeSuffix(".mp3")
                     // Remove prefix numbering like "01 - ", "01. ", "01 "
-                    val title = titleWithoutExtension.replaceFirst(Regex("""^\d+[\s\-\.]*"""), "").trim()
+                    val title = titleWithoutExtension.replaceFirst(Regex("""^\d+[\s.-]*"""), "").trim()
                     
                     Song(
                         title = if (title.isEmpty()) titleWithoutExtension else title,
@@ -166,10 +169,9 @@ object B2Utils {
     }
 
     suspend fun getAlbumArtworkUrl(
-        bucketId: String,
         bucketName: String,
         albumPrefix: String
-    ): String? {
+    ): String {
         Log.d("B2_DEBUG", "Fetching artwork for prefix: '$albumPrefix'")
 
         val pngPath = "${albumPrefix}cover.png"

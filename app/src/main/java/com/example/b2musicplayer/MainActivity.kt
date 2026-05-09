@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.media3.common.util.UnstableApi::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package com.example.b2musicplayer
 
 import android.content.ComponentName
@@ -42,7 +42,6 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
-import androidx.media3.common.util.UnstableApi
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.ViewModel
@@ -176,7 +175,6 @@ class MainActivity : ComponentActivity() {
                             albumTitle = title,
                             songs = songs,
                             artworkUrl = B2Utils.getAlbumArtworkUrl(
-                                BuildConfig.B2_BUCKET_ID,
                                 BuildConfig.B2_BUCKET_NAME,
                                 albumPath
                             )
@@ -795,7 +793,7 @@ fun MainScreen(
         if (albums.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = if (isLoadingAlbums) "Albums loading" else "No albums found",
+                    text = if (isLoadingAlbums) "Loading albums..." else "No albums found",
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
