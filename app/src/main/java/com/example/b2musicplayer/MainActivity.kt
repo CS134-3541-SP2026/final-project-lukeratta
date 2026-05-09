@@ -1,6 +1,7 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.media3.common.util.UnstableApi::class)
 package com.example.b2musicplayer
 
+import android.content.ComponentName
 import android.media.AudioAttributes as AndroidAudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
@@ -39,18 +40,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.ViewModel
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import coil3.compose.AsyncImage
 import com.example.b2musicplayer.ui.theme.B2MusicPlayerTheme
+import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -75,29 +78,25 @@ class MainUiState : ViewModel() {
 }
 
 class MainActivity : ComponentActivity() {
-    private var player: ExoPlayer? = null
+    private var player by mutableStateOf<MediaController?>(null)
+    private var controllerFuture: ListenableFuture<MediaController>? = null
     private val uiState: MainUiState by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val dataSourceFactory = B2Utils.getDataSourceFactory(this)
-        val mediaSourceFactory = DefaultMediaSourceFactory(this)
-            .setDataSourceFactory(dataSourceFactory)
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                20_000,
-                60_000,
-                10_000,
-                10_000
-            )
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .build()
-
-        player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .setLoadControl(loadControl)
-            .build()
+        val sessionToken = SessionToken(this, ComponentName(this, MusicPlaybackService::class.java))
+        controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
+        controllerFuture?.addListener(
+            {
+                try {
+                    player = controllerFuture?.get()
+                } catch (e: Exception) {
+                    Log.e("B2_DEBUG", "Failed to connect media controller: ${e.message}", e)
+                }
+            },
+            ContextCompat.getMainExecutor(this)
+        )
         lifecycleScope.launch {
             warmUpAudioOutput()
         }
@@ -194,6 +193,11 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
 
                 fun buildMediaItem(song: Song): MediaItem {
+                    val mediaMetadata = MediaMetadata.Builder()
+                        .setTitle(song.title)
+                        .setAlbumTitle(state.selectedAlbum?.albumTitle)
+                        .setArtworkUri(state.currentArtworkUrl?.let(Uri::parse))
+                        .build()
                     val cachedFile = B2Utils.getCachedSong(this@MainActivity, song.fileName)
                     return if (cachedFile != null) {
                         Log.d(
@@ -203,6 +207,7 @@ class MainActivity : ComponentActivity() {
                         MediaItem.Builder()
                             .setMediaId(song.fileName)
                             .setUri(Uri.fromFile(cachedFile))
+                            .setMediaMetadata(mediaMetadata)
                             .build()
                     } else {
                         val streamUrl = B2Utils.getDownloadUrl(
@@ -214,6 +219,7 @@ class MainActivity : ComponentActivity() {
                             .setMediaId(song.fileName)
                             .setUri(streamUrl)
                             .setCustomCacheKey(song.fileName)
+                            .setMediaMetadata(mediaMetadata)
                             .build()
                     }
                 }
@@ -450,7 +456,8 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         uiState.shouldResumePlayback = player?.isPlaying == true
         uiState.currentPosition = player?.currentPosition ?: uiState.currentPosition
-        player?.release()
+        controllerFuture?.let(MediaController::releaseFuture)
+        controllerFuture = null
         player = null
     }
 
