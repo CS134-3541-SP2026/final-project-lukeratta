@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -44,6 +45,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.ViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -54,8 +56,27 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+class MainUiState : ViewModel() {
+    var authStatusMessage by mutableStateOf<String?>(null)
+    var showBottomSheet by mutableStateOf(false)
+    var hasAutoOpenedBottomSheet by mutableStateOf(false)
+    var albumList by mutableStateOf<List<Album>>(emptyList())
+    var isLoadingAlbums by mutableStateOf(true)
+    var selectedAlbum by mutableStateOf<Album?>(null)
+    var currentSong by mutableStateOf<Song?>(null)
+    var currentArtworkUrl by mutableStateOf<String?>(null)
+    var isPlaying by mutableStateOf(false)
+    var currentPosition by mutableLongStateOf(0L)
+    var totalDuration by mutableLongStateOf(0L)
+    var playWhenReadyAfterPrepare by mutableStateOf(false)
+    var requestedSongFileName by mutableStateOf<String?>(null)
+    var hasLoadedAlbums by mutableStateOf(false)
+    var shouldResumePlayback by mutableStateOf(false)
+}
+
 class MainActivity : ComponentActivity() {
     private var player: ExoPlayer? = null
+    private val uiState: MainUiState by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,50 +104,38 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            var authStatusMessage by remember { mutableStateOf<String?>(null) }
-            var showBottomSheet by remember { mutableStateOf(false) }
-            var hasAutoOpenedBottomSheet by remember { mutableStateOf(false) }
-            var albumList by remember { mutableStateOf<List<Album>>(emptyList()) }
-            var isLoadingAlbums by remember { mutableStateOf(true) }
-            var selectedAlbum by remember { mutableStateOf<Album?>(null) }
-            var currentSong by remember { mutableStateOf<Song?>(null) }
-            var currentArtworkUrl by remember { mutableStateOf<String?>(null) }
-            var isPlaying by remember { mutableStateOf(false) }
-            var currentPosition by remember { mutableLongStateOf(0L) }
-            var totalDuration by remember { mutableLongStateOf(0L) }
-            var playWhenReadyAfterPrepare by remember { mutableStateOf(false) }
-            var requestedSongFileName by remember { mutableStateOf<String?>(null) }
+            val state = uiState
             val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
             // Sync playback state
             DisposableEffect(player) {
                 val listener = object : Player.Listener {
                     override fun onIsPlayingChanged(playing: Boolean) {
-                        isPlaying = playing
+                        state.isPlaying = playing
                     }
 
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (playbackState == Player.STATE_READY) {
-                            totalDuration = player?.duration?.coerceAtLeast(0L) ?: 0L
-                            if (playWhenReadyAfterPrepare) {
-                                playWhenReadyAfterPrepare = false
+                            state.totalDuration = player?.duration?.coerceAtLeast(0L) ?: 0L
+                            if (state.playWhenReadyAfterPrepare) {
+                                state.playWhenReadyAfterPrepare = false
                                 player?.play()
                             }
                         }
                     }
 
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        selectedAlbum?.let { album ->
+                        state.selectedAlbum?.let { album ->
                             val fileName = mediaItem?.mediaId
                             val song = album.songs.firstOrNull { it.fileName == fileName }
                                 ?: album.songs.getOrNull(player?.currentMediaItemIndex ?: -1)
 
                             if (song != null) {
-                                currentSong = song
-                                currentArtworkUrl = album.artworkUrl
+                                state.currentSong = song
+                                state.currentArtworkUrl = album.artworkUrl
                                 // Force duration update for the new track
-                                totalDuration = player?.duration?.coerceAtLeast(0L) ?: 0L
-                                currentPosition = player?.currentPosition ?: 0L
+                                state.totalDuration = player?.duration?.coerceAtLeast(0L) ?: 0L
+                                state.currentPosition = player?.currentPosition ?: 0L
                             }
                         }
                     }
@@ -138,23 +147,27 @@ class MainActivity : ComponentActivity() {
             }
 
             // Polling for progress
-            LaunchedEffect(isPlaying) {
-                while (isPlaying) {
-                    currentPosition = player?.currentPosition ?: 0L
+            LaunchedEffect(state.isPlaying) {
+                while (state.isPlaying) {
+                    state.currentPosition = player?.currentPosition ?: 0L
                     delay(500)
                 }
             }
 
             LaunchedEffect(Unit) {
+                if (state.hasLoadedAlbums) {
+                    return@LaunchedEffect
+                }
+
                 try {
                     B2Utils.authorize(BuildConfig.B2_KEY_ID, BuildConfig.B2_ACCESS_KEY)
-                    authStatusMessage = "Authorization Successful!"
+                    state.authStatusMessage = "Authorization Successful!"
 
                     val names = B2Utils.getAlbumDirectories(
                         bucketId = BuildConfig.B2_BUCKET_ID,
                         prefix = "MUSIC/ALBUMS/"
                     )
-                    albumList = names.map { title ->
+                    state.albumList = names.map { title ->
                         val albumPath = "MUSIC/ALBUMS/$title/"
                         val songs = B2Utils.getSongsInAlbum(BuildConfig.B2_BUCKET_ID, albumPath)
                         Album(
@@ -169,9 +182,10 @@ class MainActivity : ComponentActivity() {
                     }
                 } catch (e: Exception) {
                     Log.e("B2_DEBUG", "Error: ${e.message}")
-                    authStatusMessage = "Authorization Failed: ${e.message}"
+                    state.authStatusMessage = "Authorization Failed: ${e.message}"
                 } finally {
-                    isLoadingAlbums = false
+                    state.isLoadingAlbums = false
+                    state.hasLoadedAlbums = true
                 }
             }
 
@@ -205,12 +219,12 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun requestedSongIndex(album: Album): Int {
-                    val requestedIndex = album.songs.indexOfFirst { it.fileName == requestedSongFileName }
+                    val requestedIndex = album.songs.indexOfFirst { it.fileName == state.requestedSongFileName }
                     if (requestedIndex != -1) {
                         return requestedIndex
                     }
 
-                    val currentIndex = currentSong?.let { album.songs.indexOf(it) } ?: -1
+                    val currentIndex = state.currentSong?.let { album.songs.indexOf(it) } ?: -1
                     if (currentIndex != -1) {
                         return currentIndex
                     }
@@ -221,12 +235,12 @@ class MainActivity : ComponentActivity() {
                 fun playSongAt(album: Album, songIndex: Int, openBottomSheet: Boolean = false) {
                     val song = album.songs.getOrNull(songIndex) ?: return
 
-                    currentSong = song
-                    currentArtworkUrl = album.artworkUrl
+                    state.currentSong = song
+                    state.currentArtworkUrl = album.artworkUrl
                     if (openBottomSheet) {
-                        showBottomSheet = true
+                        state.showBottomSheet = true
                     }
-                    requestedSongFileName = song.fileName
+                    state.requestedSongFileName = song.fileName
 
                     val mediaItems = album.songs.map(::buildMediaItem)
                     val selectedUri = mediaItems[songIndex].localConfiguration?.uri
@@ -238,7 +252,7 @@ class MainActivity : ComponentActivity() {
                             "B2_PLAYBACK",
                             "Selected ${song.fileName}; index=$songIndex; uriScheme=${selectedUri?.scheme}; uri=$selectedUri"
                         )
-                        playWhenReadyAfterPrepare = true
+                        state.playWhenReadyAfterPrepare = true
                         it.prepare()
                     }
 
@@ -255,14 +269,31 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                LaunchedEffect(state.hasLoadedAlbums, state.currentSong?.fileName) {
+                    val song = state.currentSong ?: return@LaunchedEffect
+                    val album = state.selectedAlbum ?: return@LaunchedEffect
+                    val songIndex = album.songs.indexOfFirst { it.fileName == song.fileName }
+                    val currentPlayer = player ?: return@LaunchedEffect
+
+                    if (!state.hasLoadedAlbums || songIndex == -1 || currentPlayer.mediaItemCount > 0) {
+                        return@LaunchedEffect
+                    }
+
+                    val mediaItems = album.songs.map(::buildMediaItem)
+                    currentPlayer.setMediaItems(mediaItems)
+                    currentPlayer.seekTo(songIndex, state.currentPosition)
+                    state.playWhenReadyAfterPrepare = state.shouldResumePlayback
+                    currentPlayer.prepare()
+                }
+
                 val showDebug = false
-                if (authStatusMessage != null && showDebug) {
+                if (state.authStatusMessage != null && showDebug) {
                     AlertDialog(
-                        onDismissRequest = { authStatusMessage = null },
+                        onDismissRequest = { state.authStatusMessage = null },
                         title = { Text(text = "B2 Auth Status") },
-                        text = { Text(text = authStatusMessage.orEmpty()) },
+                        text = { Text(text = state.authStatusMessage.orEmpty()) },
                         confirmButton = {
-                            Button(onClick = { authStatusMessage = null }) {
+                            Button(onClick = { state.authStatusMessage = null }) {
                                 Text("OK")
                             }
                         }
@@ -272,23 +303,23 @@ class MainActivity : ComponentActivity() {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     bottomBar = {
-                        if (currentSong != null) {
+                        if (state.currentSong != null) {
                             MediaControlBar(
-                                song = currentSong,
-                                artworkUrl = currentArtworkUrl,
-                                isPlaying = isPlaying,
+                                song = state.currentSong,
+                                artworkUrl = state.currentArtworkUrl,
+                                isPlaying = state.isPlaying,
                                 onPlayPause = {
-                                    if (isPlaying) player?.pause() else player?.play()
+                                    if (state.isPlaying) player?.pause() else player?.play()
                                 },
                                 onNext = {
-                                    selectedAlbum?.let { album ->
+                                    state.selectedAlbum?.let { album ->
                                         val nextIndex = requestedSongIndex(album) + 1
                                         if (nextIndex in album.songs.indices) {
                                             playSongAt(album, nextIndex)
                                         }
                                     }
                                 },
-                                onClick = { showBottomSheet = true }
+                                onClick = { state.showBottomSheet = true }
                             )
                         }
                     }
@@ -324,26 +355,26 @@ class MainActivity : ComponentActivity() {
                     ) {
                         composable("main_screen") {
                             MainScreen(
-                                albums = albumList,
-                                isLoadingAlbums = isLoadingAlbums,
+                                albums = state.albumList,
+                                isLoadingAlbums = state.isLoadingAlbums,
                                 onNavigateToSub = { album ->
-                                    selectedAlbum = album
+                                    state.selectedAlbum = album
                                     navController.navigate("sub_screen")
                                 }
                             )
                         }
                         composable("sub_screen") {
                             SubScreen(
-                                album = selectedAlbum,
+                                album = state.selectedAlbum,
                                 onBack = { navController.popBackStack() },
                                 onTrackClick = { song ->
-                                    selectedAlbum?.let { album ->
+                                    state.selectedAlbum?.let { album ->
                                         val songIndex = album.songs.indexOf(song)
                                         if (songIndex != -1) {
-                                            val shouldOpenBottomSheet = !hasAutoOpenedBottomSheet
+                                            val shouldOpenBottomSheet = !state.hasAutoOpenedBottomSheet
                                             playSongAt(album, songIndex, openBottomSheet = shouldOpenBottomSheet)
                                             if (shouldOpenBottomSheet) {
-                                                hasAutoOpenedBottomSheet = true
+                                                state.hasAutoOpenedBottomSheet = true
                                             }
                                         }
                                     }
@@ -352,9 +383,9 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    if (showBottomSheet) {
+                    if (state.showBottomSheet) {
                         ModalBottomSheet(
-                            onDismissRequest = { showBottomSheet = false },
+                            onDismissRequest = { state.showBottomSheet = false },
                             sheetState = sheetState,
                             dragHandle = {
                                 Box(
@@ -363,7 +394,7 @@ class MainActivity : ComponentActivity() {
                                         .clickable {
                                             scope.launch {
                                                 sheetState.hide()
-                                                showBottomSheet = false
+                                                state.showBottomSheet = false
                                             }
                                         },
                                     contentAlignment = Alignment.Center
@@ -373,18 +404,18 @@ class MainActivity : ComponentActivity() {
                             }
                         ) {
                             PlayerDetailScreen(
-                                song = currentSong,
-                                album = selectedAlbum,
-                                artworkUrl = currentArtworkUrl,
-                                isPlaying = isPlaying,
-                                currentPosition = currentPosition,
-                                totalDuration = totalDuration,
+                                song = state.currentSong,
+                                album = state.selectedAlbum,
+                                artworkUrl = state.currentArtworkUrl,
+                                isPlaying = state.isPlaying,
+                                currentPosition = state.currentPosition,
+                                totalDuration = state.totalDuration,
                                 onSeek = { pos -> player?.seekTo(pos) },
                                 onPlayPause = {
-                                    if (isPlaying) player?.pause() else player?.play()
+                                    if (state.isPlaying) player?.pause() else player?.play()
                                 },
                                 onNext = {
-                                    selectedAlbum?.let { album ->
+                                    state.selectedAlbum?.let { album ->
                                         val nextIndex = requestedSongIndex(album) + 1
                                         if (nextIndex in album.songs.indices) {
                                             playSongAt(album, nextIndex)
@@ -393,7 +424,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onPrevious = {
                                     player?.let { currentPlayer ->
-                                        selectedAlbum?.let { album ->
+                                        state.selectedAlbum?.let { album ->
                                             if (currentPlayer.currentPosition > 3000L) {
                                                 currentPlayer.seekTo(0)
                                             } else {
@@ -417,6 +448,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        uiState.shouldResumePlayback = player?.isPlaying == true
+        uiState.currentPosition = player?.currentPosition ?: uiState.currentPosition
         player?.release()
         player = null
     }
