@@ -164,6 +164,38 @@ object B2Utils {
         }
     }
 
+    suspend fun getAlbumArtworkUrl(
+        bucketId: String,
+        bucketName: String,
+        albumPrefix: String
+    ): String? {
+        val url = "$apiUrl/b2api/v2/b2_list_file_names"
+        Log.d("B2_DEBUG", "Fetching artwork for prefix: '$albumPrefix'")
+
+        return try {
+            val response: ListFileNamesResponse = client.post(url) {
+                header(HttpHeaders.Authorization, authToken)
+                contentType(ContentType.Application.Json)
+                setBody(mapOf(
+                    "bucketId" to bucketId,
+                    "prefix" to albumPrefix
+                ))
+            }.body()
+
+            val artworkFile = response.files
+                .filter { it.action == "upload" }
+                .firstOrNull { it.fileName.substringAfterLast("/").lowercase() == "cover.png" }
+                ?: response.files
+                    .filter { it.action == "upload" }
+                    .firstOrNull { it.fileName.substringAfterLast("/").lowercase() == "cover.jpg" }
+
+            artworkFile?.let { getDownloadUrl(bucketName, it.fileName) }
+        } catch (e: Exception) {
+            Log.e("B2_DEBUG", "Error fetching artwork for $albumPrefix: ${e.message}")
+            null
+        }
+    }
+
     /**
      * Constructs a download URL for a file in a public/private bucket.
      * For private buckets, the authToken can be appended as a query parameter.

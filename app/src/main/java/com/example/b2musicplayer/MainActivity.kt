@@ -160,9 +160,10 @@ class MainActivity : ComponentActivity() {
                         Album(
                             albumTitle = title,
                             songs = songs,
-                            artworkUrl = B2Utils.getDownloadUrl(
+                            artworkUrl = B2Utils.getAlbumArtworkUrl(
+                                BuildConfig.B2_BUCKET_ID,
                                 BuildConfig.B2_BUCKET_NAME,
-                                "${albumPath}cover.jpg"
+                                albumPath
                             )
                         )
                     }
