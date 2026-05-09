@@ -68,6 +68,8 @@ class MainUiState : ViewModel() {
     var selectedAlbum by mutableStateOf<Album?>(null)
     var currentSong by mutableStateOf<Song?>(null)
     var currentArtworkUrl by mutableStateOf<String?>(null)
+    var currentArtist by mutableStateOf<String?>(null)
+    var artistByFileName by mutableStateOf<Map<String, String>>(emptyMap())
     var isPlaying by mutableStateOf(false)
     var currentPosition by mutableLongStateOf(0L)
     var totalDuration by mutableLongStateOf(0L)
@@ -132,6 +134,7 @@ class MainActivity : ComponentActivity() {
                             if (song != null) {
                                 state.currentSong = song
                                 state.currentArtworkUrl = album.artworkUrl
+                                state.currentArtist = state.artistByFileName[song.fileName]
                                 // Force duration update for the new track
                                 state.totalDuration = player?.duration?.coerceAtLeast(0L) ?: 0L
                                 state.currentPosition = player?.currentPosition ?: 0L
@@ -193,8 +196,10 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
 
                 fun buildMediaItem(song: Song): MediaItem {
+                    val artist = state.artistByFileName[song.fileName]
                     val mediaMetadata = MediaMetadata.Builder()
                         .setTitle(song.title)
+                        .setArtist(artist)
                         .setAlbumTitle(state.selectedAlbum?.albumTitle)
                         .setArtworkUri(state.currentArtworkUrl?.let(Uri::parse))
                         .build()
@@ -243,6 +248,7 @@ class MainActivity : ComponentActivity() {
 
                     state.currentSong = song
                     state.currentArtworkUrl = album.artworkUrl
+                    state.currentArtist = state.artistByFileName[song.fileName]
                     if (openBottomSheet) {
                         state.showBottomSheet = true
                     }
@@ -269,9 +275,32 @@ class MainActivity : ComponentActivity() {
                                 bucketName = BuildConfig.B2_BUCKET_NAME,
                                 filePath = song.fileName
                             )
+                            val artist = B2Utils.getCachedSongArtist(this@MainActivity, song.fileName)
+                            if (artist != null) {
+                                state.artistByFileName = state.artistByFileName + (song.fileName to artist)
+                                if (state.currentSong?.fileName == song.fileName) {
+                                    state.currentArtist = artist
+                                }
+                            }
                         } catch (e: Exception) {
                             Log.e("B2_DEBUG", "Background cache failed for ${song.fileName}: ${e.message}", e)
                         }
+                    }
+                }
+
+                LaunchedEffect(state.currentSong?.fileName) {
+                    val song = state.currentSong ?: return@LaunchedEffect
+                    if (state.artistByFileName.containsKey(song.fileName)) {
+                        state.currentArtist = state.artistByFileName[song.fileName]
+                        return@LaunchedEffect
+                    }
+
+                    val artist = withContext(Dispatchers.IO) {
+                        B2Utils.getCachedSongArtist(this@MainActivity, song.fileName)
+                    }
+                    if (artist != null) {
+                        state.artistByFileName = state.artistByFileName + (song.fileName to artist)
+                        state.currentArtist = artist
                     }
                 }
 
@@ -312,6 +341,8 @@ class MainActivity : ComponentActivity() {
                         if (state.currentSong != null) {
                             MediaControlBar(
                                 song = state.currentSong,
+                                album = state.selectedAlbum,
+                                artistName = state.currentArtist,
                                 artworkUrl = state.currentArtworkUrl,
                                 isPlaying = state.isPlaying,
                                 onPlayPause = {
@@ -412,6 +443,7 @@ class MainActivity : ComponentActivity() {
                             PlayerDetailScreen(
                                 song = state.currentSong,
                                 album = state.selectedAlbum,
+                                artistName = state.currentArtist,
                                 artworkUrl = state.currentArtworkUrl,
                                 isPlaying = state.isPlaying,
                                 currentPosition = state.currentPosition,
@@ -511,6 +543,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MediaControlBar(
     song: Song?,
+    album: Album?,
+    artistName: String?,
     artworkUrl: String?,
     isPlaying: Boolean,
     onPlayPause: () -> Unit,
@@ -560,6 +594,12 @@ fun MediaControlBar(
                         fontWeight = FontWeight.Bold,
                         maxLines = 1
                     )
+                    Text(
+                        text = artistName ?: album?.albumTitle.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                        maxLines = 1
+                    )
                 }
             }
             Row {
@@ -583,6 +623,7 @@ fun MediaControlBar(
 fun PlayerDetailScreen(
     song: Song?,
     album: Album?,
+    artistName: String?,
     artworkUrl: String?,
     isPlaying: Boolean,
     currentPosition: Long,
@@ -624,7 +665,7 @@ fun PlayerDetailScreen(
             maxLines = 1
         )
         Text(
-            text = album?.albumTitle ?: "Album Title",
+            text = artistName ?: album?.albumTitle ?: "Album Title",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1

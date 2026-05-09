@@ -1,5 +1,6 @@
 package com.example.b2musicplayer
 
+import android.media.MediaMetadataRetriever
 import android.util.Log
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
@@ -261,6 +262,23 @@ object B2Utils {
     fun getCachedSong(context: Context, filePath: String): File? {
         val file = getSongCacheFile(context, filePath)
         return if (file.isFile && file.length() > 0L) file else null
+    }
+
+    fun getCachedSongArtist(context: Context, filePath: String): String? {
+        val file = getCachedSong(context, filePath) ?: return null
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                ?.takeIf { it.isNotBlank() }
+                ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+                    ?.takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            Log.d("B2_DEBUG", "Could not read artist tag for $filePath: ${e.message}")
+            null
+        } finally {
+            retriever.release()
+        }
     }
 
     internal fun buildDownloadUrl(
