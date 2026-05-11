@@ -60,6 +60,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+// Holds Compose-observed UI and playback state across configuration changes.
 class MainUiState : ViewModel() {
     var authStatusMessage by mutableStateOf<String?>(null)
     var showBottomSheet by mutableStateOf(false)
@@ -90,6 +91,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Connect this activity to the MediaSessionService so UI controls can drive playback.
         val sessionToken = SessionToken(this, ComponentName(this, MusicPlaybackService::class.java))
         controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
         controllerFuture?.addListener(
@@ -111,6 +113,7 @@ class MainActivity : ComponentActivity() {
             val state = uiState
             val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+            // Fetches all metadata needed to display and play a single album from B2.
             suspend fun fetchAlbum(title: String): Album {
                 val albumPath = "MUSIC/ALBUMS/$title/"
                 val songs = B2Utils.getSongsInAlbum(BuildConfig.B2_BUCKET_ID, albumPath)
@@ -124,6 +127,7 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            // Refreshes albums from B2, either incrementally or by replacing the whole cache.
             suspend fun refreshAlbumsFromB2(forceFullRefresh: Boolean) {
                 state.isLoadingAlbums = state.albumList.isEmpty()
                 try {
@@ -173,7 +177,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Sync playback state
+            // Mirrors Media3 player callbacks into Compose state for controls and artwork.
             DisposableEffect(player) {
                 val listener = object : Player.Listener {
                     override fun onIsPlayingChanged(playing: Boolean) {
@@ -219,7 +223,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Polling for progress
+            // Polls playback position only while audio is actively playing.
             LaunchedEffect(state.isPlaying) {
                 while (state.isPlaying) {
                     state.currentPosition = player?.currentPosition ?: 0L
@@ -227,6 +231,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // Loads cached albums immediately, then refreshes only missing albums from B2.
             LaunchedEffect(Unit) {
                 if (state.hasLoadedAlbums) {
                     return@LaunchedEffect
@@ -246,6 +251,7 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val scope = rememberCoroutineScope()
 
+                // Builds a Media3 item from a song, preferring a downloaded cache file.
                 fun buildMediaItem(song: Song): MediaItem {
                     val artist = state.artistByFileName[song.fileName]
                     val mediaMetadata = MediaMetadata.Builder()
@@ -280,6 +286,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Resolves the current song's album index using the most reliable state available.
                 fun requestedSongIndex(album: Album): Int {
                     val requestedIndex = album.songs.indexOfFirst { it.fileName == state.requestedSongFileName }
                     if (requestedIndex != -1) {
@@ -294,6 +301,7 @@ class MainActivity : ComponentActivity() {
                     return player?.currentMediaItemIndex ?: -1
                 }
 
+                // Starts playback for one album track and kicks off background caching/metadata reads.
                 fun playSongAt(album: Album, songIndex: Int, openBottomSheet: Boolean = false) {
                     val song = album.songs.getOrNull(songIndex) ?: return
 
@@ -339,6 +347,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Advances to the next album track when the single queued MediaItem finishes.
                 LaunchedEffect(state.playbackEndedCount) {
                     if (state.playbackEndedCount == 0) {
                         return@LaunchedEffect
@@ -352,6 +361,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Reads artist metadata from a cached MP3 after the current song changes.
                 LaunchedEffect(state.currentSong?.fileName) {
                     val song = state.currentSong ?: return@LaunchedEffect
                     if (state.artistByFileName.containsKey(song.fileName)) {
@@ -368,6 +378,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Rebuilds the active MediaItem after activity recreation when playback state exists.
                 LaunchedEffect(state.hasLoadedAlbums, state.currentSong?.fileName) {
                     val song = state.currentSong ?: return@LaunchedEffect
                     val album = state.selectedAlbum ?: return@LaunchedEffect
@@ -385,6 +396,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val showDebug = false
+                // Optional auth status dialog for local debugging.
                 if (state.authStatusMessage != null && showDebug) {
                     AlertDialog(
                         onDismissRequest = { state.authStatusMessage = null },
@@ -401,6 +413,7 @@ class MainActivity : ComponentActivity() {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     bottomBar = {
+                        // Mini player shown whenever a track has been selected.
                         if (state.currentSong != null) {
                             MediaControlBar(
                                 song = state.currentSong,
@@ -424,6 +437,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 ) { innerPadding ->
+                    // Two-screen navigation: album list and selected album track list.
                     NavHost(
                         navController = navController,
                         startDestination = "main_screen",
@@ -484,6 +498,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    // Confirm before replacing cached album metadata with a full B2 refresh.
                     if (state.showRefreshConfirmation) {
                         AlertDialog(
                             onDismissRequest = { state.showRefreshConfirmation = false },
@@ -513,6 +528,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
+                    // Expanded player sheet with artwork, progress, and transport controls.
                     if (state.showBottomSheet) {
                         ModalBottomSheet(
                             onDismissRequest = { state.showBottomSheet = false },
@@ -633,6 +649,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Compact bottom player shown above the system navigation area.
 @Composable
 fun MediaControlBar(
     song: Song?,
@@ -712,6 +729,7 @@ fun MediaControlBar(
 
 }
 
+// Full player controls displayed inside the modal bottom sheet.
 @Composable
 fun PlayerDetailScreen(
     song: Song?,
@@ -766,7 +784,7 @@ fun PlayerDetailScreen(
         
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Progress Bar
+        // Custom progress bar that matches the app's current color scheme.
         Column(modifier = Modifier.fillMaxWidth()) {
             val trackColor = MaterialTheme.colorScheme.onSurface
             val progress = if (totalDuration > 0) currentPosition.toFloat() / totalDuration.toFloat() else 0f
@@ -863,6 +881,8 @@ fun PlayerDetailScreen(
         Spacer(modifier = Modifier.height(48.dp))
     }
 }
+
+// Formats milliseconds as m:ss for the player progress labels.
 private fun formatTime(ms: Long): String {
     val totalSeconds = ms / 1000
     val minutes = totalSeconds / 60
@@ -870,6 +890,7 @@ private fun formatTime(ms: Long): String {
     return "%d:%02d".format(minutes, seconds)
 }
 
+// Album list screen with a manual B2 refresh action in the top-right corner.
 @Composable
 fun MainScreen(
     albums: List<Album>,
@@ -922,6 +943,7 @@ fun MainScreen(
     }
 }
 
+// Single album row used by the main album list.
 @Composable
 fun AlbumItem(album: Album, onClick: () -> Unit) {
     Card(
@@ -962,6 +984,7 @@ fun AlbumItem(album: Album, onClick: () -> Unit) {
     }
 }
 
+// Selected album screen with artwork header and numbered track list.
 @Composable
 fun SubScreen(album: Album?, onBack: () -> Unit, onTrackClick: (Song) -> Unit) {
     if (album == null || album.songs.isEmpty()) {
@@ -973,7 +996,7 @@ fun SubScreen(album: Album?, onBack: () -> Unit, onTrackClick: (Song) -> Unit) {
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
-            // Album Header
+            // Large album artwork/title area above the track list.
             item {
                 Column(
                     modifier = Modifier
@@ -1005,7 +1028,7 @@ fun SubScreen(album: Album?, onBack: () -> Unit, onTrackClick: (Song) -> Unit) {
                 }
             }
 
-            // Track list
+            // Numbered tracks; clicking a row starts playback for that song.
             itemsIndexed(album.songs) { index, song ->
                 Column(
                     modifier = Modifier.clickable { onTrackClick(song) }
