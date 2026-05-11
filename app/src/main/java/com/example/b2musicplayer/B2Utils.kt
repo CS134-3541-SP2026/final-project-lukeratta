@@ -11,6 +11,8 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.http.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -32,12 +34,14 @@ object B2Utils {
         return DefaultDataSource.Factory(context, httpDataSourceFactory)
     }
 
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
+
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) {
-            json(Json {
-                ignoreUnknownKeys = true
-                isLenient = true
-            })
+            json(json)
         }
     }
 
@@ -52,6 +56,34 @@ object B2Utils {
 
     var accountId: String = ""
         private set
+
+    fun loadCachedAlbums(context: Context): List<Album> {
+        val cacheFile = getAlbumCacheFile(context)
+        if (!cacheFile.isFile) {
+            return emptyList()
+        }
+
+        return try {
+            json.decodeFromString(cacheFile.readText())
+        } catch (e: Exception) {
+            Log.e("B2_DEBUG", "Failed to read album cache: ${e.message}", e)
+            emptyList()
+        }
+    }
+
+    suspend fun saveCachedAlbums(context: Context, albums: List<Album>) {
+        withContext(Dispatchers.IO) {
+            val cacheFile = getAlbumCacheFile(context)
+            cacheFile.parentFile?.mkdirs()
+            val tempFile = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
+
+            tempFile.writeText(json.encodeToString(albums))
+            if (!tempFile.renameTo(cacheFile)) {
+                tempFile.copyTo(cacheFile, overwrite = true)
+                tempFile.delete()
+            }
+        }
+    }
 
     /**
      * Authorizes with Backblaze B2 using v2 API.
@@ -318,6 +350,10 @@ object B2Utils {
             .takeIf { it.isNotBlank() && it.length <= 8 }
             ?: "mp3"
         return File(File(context.cacheDir, "downloaded-songs"), "${filePath.sha256()}.$extension")
+    }
+
+    private fun getAlbumCacheFile(context: Context): File {
+        return File(context.filesDir, "albums.json")
     }
 
     private fun String.sha256(): String {

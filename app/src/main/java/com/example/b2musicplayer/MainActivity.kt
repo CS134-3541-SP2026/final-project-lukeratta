@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.*
@@ -41,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -76,6 +78,8 @@ class MainUiState : ViewModel() {
     var requestedSongFileName by mutableStateOf<String?>(null)
     var hasLoadedAlbums by mutableStateOf(false)
     var shouldResumePlayback by mutableStateOf(false)
+    var playbackEndedCount by mutableIntStateOf(0)
+    var showRefreshConfirmation by mutableStateOf(false)
 }
 
 class MainActivity : ComponentActivity() {
@@ -107,6 +111,68 @@ class MainActivity : ComponentActivity() {
             val state = uiState
             val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+            suspend fun fetchAlbum(title: String): Album {
+                val albumPath = "MUSIC/ALBUMS/$title/"
+                val songs = B2Utils.getSongsInAlbum(BuildConfig.B2_BUCKET_ID, albumPath)
+                return Album(
+                    albumTitle = title,
+                    songs = songs,
+                    artworkUrl = B2Utils.getAlbumArtworkUrl(
+                        BuildConfig.B2_BUCKET_NAME,
+                        albumPath
+                    )
+                )
+            }
+
+            suspend fun refreshAlbumsFromB2(forceFullRefresh: Boolean) {
+                state.isLoadingAlbums = state.albumList.isEmpty()
+                try {
+                    B2Utils.authorize(BuildConfig.B2_KEY_ID, BuildConfig.B2_ACCESS_KEY)
+                    state.authStatusMessage = "Authorization Successful!"
+
+                    val names = B2Utils.getAlbumDirectories(
+                        bucketId = BuildConfig.B2_BUCKET_ID,
+                        prefix = "MUSIC/ALBUMS/"
+                    )
+
+                    val cachedByTitle = if (forceFullRefresh) {
+                        emptyMap()
+                    } else {
+                        state.albumList.associateBy { it.albumTitle }
+                    }
+                    val titlesToFetch = names.filterNot { cachedByTitle.containsKey(it) }
+                    val fetchedAlbumsByTitle = titlesToFetch
+                        .map { title -> fetchAlbum(title) }
+                        .associateBy { it.albumTitle }
+
+                    val refreshedAlbums = names.mapNotNull { title ->
+                        cachedByTitle[title] ?: fetchedAlbumsByTitle[title]
+                    }
+
+                    if (refreshedAlbums != state.albumList || forceFullRefresh) {
+                        state.albumList = refreshedAlbums
+                        state.selectedAlbum?.let { selected ->
+                            state.selectedAlbum = refreshedAlbums.firstOrNull {
+                                it.albumTitle == selected.albumTitle
+                            } ?: selected
+                        }
+                        B2Utils.saveCachedAlbums(this@MainActivity, refreshedAlbums)
+                        Log.d(
+                            "B2_DEBUG",
+                            "Saved ${refreshedAlbums.size} albums to cache; fetched ${titlesToFetch.size} albums"
+                        )
+                    } else {
+                        Log.d("B2_DEBUG", "Album cache is up to date; no new albums fetched")
+                    }
+                } catch (e: Exception) {
+                    Log.e("B2_DEBUG", "Error: ${e.message}")
+                    state.authStatusMessage = "Authorization Failed: ${e.message}"
+                } finally {
+                    state.isLoadingAlbums = false
+                    state.hasLoadedAlbums = true
+                }
+            }
+
             // Sync playback state
             DisposableEffect(player) {
                 val listener = object : Player.Listener {
@@ -121,7 +187,13 @@ class MainActivity : ComponentActivity() {
                                 state.playWhenReadyAfterPrepare = false
                                 player?.play()
                             }
+                        } else if (playbackState == Player.STATE_ENDED) {
+                            state.playbackEndedCount += 1
                         }
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        Log.e("B2_PLAYBACK", "Playback failed: ${error.errorCodeName}: ${error.message}", error)
                     }
 
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -160,33 +232,14 @@ class MainActivity : ComponentActivity() {
                     return@LaunchedEffect
                 }
 
-                try {
-                    B2Utils.authorize(BuildConfig.B2_KEY_ID, BuildConfig.B2_ACCESS_KEY)
-                    state.authStatusMessage = "Authorization Successful!"
-
-                    val names = B2Utils.getAlbumDirectories(
-                        bucketId = BuildConfig.B2_BUCKET_ID,
-                        prefix = "MUSIC/ALBUMS/"
-                    )
-                    state.albumList = names.map { title ->
-                        val albumPath = "MUSIC/ALBUMS/$title/"
-                        val songs = B2Utils.getSongsInAlbum(BuildConfig.B2_BUCKET_ID, albumPath)
-                        Album(
-                            albumTitle = title,
-                            songs = songs,
-                            artworkUrl = B2Utils.getAlbumArtworkUrl(
-                                BuildConfig.B2_BUCKET_NAME,
-                                albumPath
-                            )
-                        )
-                    }
-                } catch (e: Exception) {
-                    Log.e("B2_DEBUG", "Error: ${e.message}")
-                    state.authStatusMessage = "Authorization Failed: ${e.message}"
-                } finally {
+                val cachedAlbums = B2Utils.loadCachedAlbums(this@MainActivity)
+                if (cachedAlbums.isNotEmpty()) {
+                    state.albumList = cachedAlbums
                     state.isLoadingAlbums = false
-                    state.hasLoadedAlbums = true
+                    Log.d("B2_DEBUG", "Loaded ${cachedAlbums.size} albums from local cache")
                 }
+
+                refreshAlbumsFromB2(forceFullRefresh = false)
             }
 
             B2MusicPlayerTheme {
@@ -252,15 +305,15 @@ class MainActivity : ComponentActivity() {
                     }
                     state.requestedSongFileName = song.fileName
 
-                    val mediaItems = album.songs.map(::buildMediaItem)
-                    val selectedUri = mediaItems[songIndex].localConfiguration?.uri
+                    val mediaItem = buildMediaItem(song)
+                    val selectedUri = mediaItem.localConfiguration?.uri
 
                     player?.let {
-                        it.setMediaItems(mediaItems)
-                        it.seekTo(songIndex, 0L)
+                        it.setMediaItem(mediaItem)
+                        it.seekTo(0L)
                         Log.d(
                             "B2_PLAYBACK",
-                            "Selected ${song.fileName}; index=$songIndex; uriScheme=${selectedUri?.scheme}; uri=$selectedUri"
+                            "Selected ${song.fileName}; albumIndex=$songIndex; uriScheme=${selectedUri?.scheme}; uri=$selectedUri"
                         )
                         state.playWhenReadyAfterPrepare = true
                         it.prepare()
@@ -282,6 +335,19 @@ class MainActivity : ComponentActivity() {
                             }
                         } catch (e: Exception) {
                             Log.e("B2_DEBUG", "Background cache failed for ${song.fileName}: ${e.message}", e)
+                        }
+                    }
+                }
+
+                LaunchedEffect(state.playbackEndedCount) {
+                    if (state.playbackEndedCount == 0) {
+                        return@LaunchedEffect
+                    }
+
+                    state.selectedAlbum?.let { album ->
+                        val nextIndex = requestedSongIndex(album) + 1
+                        if (nextIndex in album.songs.indices) {
+                            playSongAt(album, nextIndex)
                         }
                     }
                 }
@@ -312,9 +378,8 @@ class MainActivity : ComponentActivity() {
                         return@LaunchedEffect
                     }
 
-                    val mediaItems = album.songs.map(::buildMediaItem)
-                    currentPlayer.setMediaItems(mediaItems)
-                    currentPlayer.seekTo(songIndex, state.currentPosition)
+                    currentPlayer.setMediaItem(buildMediaItem(song))
+                    currentPlayer.seekTo(state.currentPosition)
                     state.playWhenReadyAfterPrepare = state.shouldResumePlayback
                     currentPlayer.prepare()
                 }
@@ -392,6 +457,7 @@ class MainActivity : ComponentActivity() {
                             MainScreen(
                                 albums = state.albumList,
                                 isLoadingAlbums = state.isLoadingAlbums,
+                                onRefreshClick = { state.showRefreshConfirmation = true },
                                 onNavigateToSub = { album ->
                                     state.selectedAlbum = album
                                     navController.navigate("sub_screen")
@@ -416,6 +482,35 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                         }
+                    }
+
+                    if (state.showRefreshConfirmation) {
+                        AlertDialog(
+                            onDismissRequest = { state.showRefreshConfirmation = false },
+                            title = { Text(text = "Refresh from B2?") },
+                            text = {
+                                Text(
+                                    text = "This will re-download the full album list and replace the local album cache."
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        state.showRefreshConfirmation = false
+                                        scope.launch {
+                                            refreshAlbumsFromB2(forceFullRefresh = true)
+                                        }
+                                    }
+                                ) {
+                                    Text("Refresh")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { state.showRefreshConfirmation = false }) {
+                                    Text("Cancel")
+                                }
+                            }
+                        )
                     }
 
                     if (state.showBottomSheet) {
@@ -779,15 +874,29 @@ private fun formatTime(ms: Long): String {
 fun MainScreen(
     albums: List<Album>,
     isLoadingAlbums: Boolean,
+    onRefreshClick: () -> Unit,
     onNavigateToSub: (Album) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        Text(
-            text = "Albums",
-            style = MaterialTheme.typography.headlineLarge,
-            modifier = Modifier.padding(16.dp),
-            fontWeight = FontWeight.Bold
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, top = 16.dp, end = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Albums",
+                style = MaterialTheme.typography.headlineLarge,
+                modifier = Modifier.weight(1f),
+                fontWeight = FontWeight.Bold
+            )
+            IconButton(onClick = onRefreshClick) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Refresh albums from B2"
+                )
+            }
+        }
         
         if (albums.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

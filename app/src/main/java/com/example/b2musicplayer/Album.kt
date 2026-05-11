@@ -1,6 +1,6 @@
 package com.example.b2musicplayer
 
-import androidx.compose.ui.graphics.painter.Painter
+import kotlinx.serialization.Serializable
 
 /**
  * Data class representing a Music Album.
@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.painter.Painter
  * @param songs A list of Song objects belonging to this album
  * @param artworkUrl The URL to the album's artwork (e.g. cover.jpg)
  */
+@Serializable
 data class Album(
     val albumTitle: String = "",
     val songs: List<Song> = emptyList(),
