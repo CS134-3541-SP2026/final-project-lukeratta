@@ -86,24 +86,15 @@ object B2Utils {
      * Includes a fallback to manually parse paths if the B2 delimiter fails.
      */
     suspend fun getAlbumDirectories(bucketId: String, prefix: String = "MUSIC/ALBUMS/"): List<String> {
-        val url = "$apiUrl/b2api/v2/b2_list_file_names"
         Log.d("B2_DEBUG", "Fetching folders from bucketId: $bucketId with prefix: '$prefix'")
 
         return try {
-            val response: ListFileNamesResponse = client.post(url) {
-                header(HttpHeaders.Authorization, authToken)
-                contentType(ContentType.Application.Json)
-                setBody(mapOf(
-                    "bucketId" to bucketId,
-                    "prefix" to prefix,
-                    "delimiter" to "/"
-                ))
-            }.body()
+            val files = listFileNames(bucketId = bucketId, prefix = prefix, delimiter = "/")
 
-            Log.d("B2_DEBUG", "B2 response contained ${response.files.size} total items")
+            Log.d("B2_DEBUG", "B2 response contained ${files.size} total items")
 
             // 1. Try to get folders from 'folder' action (standard B2 behavior)
-            val folderActions = response.files
+            val folderActions = files
                 .filter { it.action == "folder" }
                 .map { it.fileName.removePrefix(prefix).removeSuffix("/") }
                 .filter { it.isNotEmpty() }
@@ -114,7 +105,7 @@ object B2Utils {
             }
 
             // 2. Fallback: Parse from 'upload' action (handles your specific bucket structure)
-            val parsedFolders = response.files
+            val parsedFolders = files
                 .filter { it.action == "upload" }
                 .map { it.fileName.removePrefix(prefix) }
                 .map { if (it.contains('/')) it.substringBefore('/') else "" }
@@ -134,20 +125,10 @@ object B2Utils {
      * Lists songs in a specific album directory.
      */
     suspend fun getSongsInAlbum(bucketId: String, albumPrefix: String): List<Song> {
-        val url = "$apiUrl/b2api/v2/b2_list_file_names"
         Log.d("B2_DEBUG", "Fetching songs for prefix: '$albumPrefix'")
 
         return try {
-            val response: ListFileNamesResponse = client.post(url) {
-                header(HttpHeaders.Authorization, authToken)
-                contentType(ContentType.Application.Json)
-                setBody(mapOf(
-                    "bucketId" to bucketId,
-                    "prefix" to albumPrefix
-                ))
-            }.body()
-
-            response.files
+            listFileNames(bucketId = bucketId, prefix = albumPrefix)
                 .filter { it.action == "upload" && it.fileName.lowercase().endsWith(".mp3") }
                 .sortedBy { it.fileName }
                 .map { b2File ->
@@ -166,6 +147,38 @@ object B2Utils {
             Log.e("B2_DEBUG", "Error fetching songs for $albumPrefix: ${e.message}")
             emptyList()
         }
+    }
+
+    private suspend fun listFileNames(
+        bucketId: String,
+        prefix: String,
+        delimiter: String? = null
+    ): List<B2File> {
+        val url = "$apiUrl/b2api/v2/b2_list_file_names"
+        val files = mutableListOf<B2File>()
+        var startFileName: String? = null
+
+        do {
+            val requestBody = ListFileNamesRequest(
+                bucketId = bucketId,
+                prefix = prefix,
+                maxFileCount = 10_000,
+                delimiter = delimiter,
+                startFileName = startFileName
+            )
+
+            val response: ListFileNamesResponse = client.post(url) {
+                header(HttpHeaders.Authorization, authToken)
+                contentType(ContentType.Application.Json)
+                setBody(requestBody)
+            }.body()
+
+            files += response.files
+            val nextFileName = response.nextFileName
+            startFileName = nextFileName?.takeIf { it != startFileName }
+        } while (startFileName != null)
+
+        return files
     }
 
     suspend fun getAlbumArtworkUrl(
@@ -325,6 +338,15 @@ data class B2AuthResponse(
 data class ListFileNamesResponse(
     val files: List<B2File>,
     val nextFileName: String? = null
+)
+
+@Serializable
+data class ListFileNamesRequest(
+    val bucketId: String,
+    val prefix: String,
+    val maxFileCount: Int,
+    val delimiter: String? = null,
+    val startFileName: String? = null
 )
 
 @Serializable

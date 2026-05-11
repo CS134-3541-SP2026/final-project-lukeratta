@@ -1,9 +1,29 @@
 package com.example.b2musicplayer
 
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class B2UtilsTest {
+    @Test
+    fun listFileNamesRequest_serializesMaxFileCount() {
+        val json = Json.encodeToString(
+            ListFileNamesRequest(
+                bucketId = "bucket-id",
+                prefix = "MUSIC/ALBUMS/Test Album/",
+                maxFileCount = 10_000,
+                delimiter = "/",
+                startFileName = "MUSIC/ALBUMS/Test Album/099.mp3"
+            )
+        )
+
+        assertEquals(
+            """{"bucketId":"bucket-id","prefix":"MUSIC/ALBUMS/Test Album/","maxFileCount":10000,"delimiter":"/","startFileName":"MUSIC/ALBUMS/Test Album/099.mp3"}""",
+            json
+        )
+    }
+
     @Test
     fun buildDownloadUrl_encodesCommasInFilePath() {
         val url = B2Utils.buildDownloadUrl(
