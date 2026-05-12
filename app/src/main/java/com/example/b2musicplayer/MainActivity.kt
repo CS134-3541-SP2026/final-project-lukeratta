@@ -199,6 +199,76 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // Builds a Media3 item from a song, preferring a downloaded cache file.
+            fun buildMediaItem(song: Song, album: Album): MediaItem {
+                val artist = state.artistByFileName[song.fileName]
+                val mediaMetadata = MediaMetadata.Builder()
+                    .setTitle(song.title)
+                    .setArtist(artist)
+                    .setAlbumTitle(album.albumTitle)
+                    .setArtworkUri(album.artworkUrl?.let(Uri::parse))
+                    .build()
+                val cachedFile = B2Utils.getCachedSong(this@MainActivity, song.fileName)
+                return if (cachedFile != null) {
+                    Log.d(
+                        "B2_PLAYBACK",
+                        "Queue cached file for ${song.fileName}: ${cachedFile.absolutePath} (${cachedFile.length()} bytes)"
+                    )
+                    MediaItem.Builder()
+                        .setMediaId(song.fileName)
+                        .setUri(Uri.fromFile(cachedFile))
+                        .setMediaMetadata(mediaMetadata)
+                        .build()
+                } else {
+                    val streamUrl = B2Utils.getDownloadUrl(
+                        BuildConfig.B2_BUCKET_NAME,
+                        song.fileName
+                    )
+                    Log.d("B2_PLAYBACK", "Queue streaming URL for ${song.fileName}")
+                    MediaItem.Builder()
+                        .setMediaId(song.fileName)
+                        .setUri(streamUrl)
+                        .setCustomCacheKey(song.fileName)
+                        .setMediaMetadata(mediaMetadata)
+                        .build()
+                }
+            }
+
+            fun buildPlaybackWindow(album: Album, songIndex: Int): Pair<List<MediaItem>, Int> {
+                val firstIndex = (songIndex - 1).coerceAtLeast(0)
+                val lastIndex = (songIndex + 2).coerceAtMost(album.songs.lastIndex)
+                val mediaItems = album.songs
+                    .subList(firstIndex, lastIndex + 1)
+                    .map { song -> buildMediaItem(song, album) }
+                return mediaItems to songIndex - firstIndex
+            }
+
+            fun appendUpcomingTracks(album: Album, currentPlayer: MediaController, currentSong: Song) {
+                val currentAlbumIndex = album.songs.indexOfFirst { it.fileName == currentSong.fileName }
+                val mediaItemCount = currentPlayer.mediaItemCount
+                val currentQueueIndex = currentPlayer.currentMediaItemIndex
+                if (currentAlbumIndex == -1 || mediaItemCount == 0 || currentQueueIndex < mediaItemCount - 2) {
+                    return
+                }
+
+                val lastQueuedFileName = currentPlayer.getMediaItemAt(mediaItemCount - 1).mediaId
+                val lastQueuedAlbumIndex = album.songs.indexOfFirst { it.fileName == lastQueuedFileName }
+                val firstAppendIndex = (lastQueuedAlbumIndex + 1).coerceAtLeast(currentAlbumIndex + 1)
+                if (firstAppendIndex !in album.songs.indices) {
+                    return
+                }
+
+                val lastAppendIndex = (firstAppendIndex + 2).coerceAtMost(album.songs.lastIndex)
+                val mediaItems = album.songs
+                    .subList(firstAppendIndex, lastAppendIndex + 1)
+                    .map { song -> buildMediaItem(song, album) }
+                currentPlayer.addMediaItems(mediaItems)
+                Log.d(
+                    "B2_PLAYBACK",
+                    "Appended ${mediaItems.size} notification queue items starting at album index $firstAppendIndex"
+                )
+            }
+
             // Mirrors Media3 player callbacks into Compose state for controls and artwork.
             DisposableEffect(player) {
                 val listener = object : Player.Listener {
@@ -236,6 +306,9 @@ class MainActivity : ComponentActivity() {
                                 // Force duration update for the new track
                                 state.totalDuration = player?.duration?.coerceAtLeast(0L) ?: 0L
                                 state.currentPosition = player?.currentPosition ?: 0L
+                                player?.let { currentPlayer ->
+                                    appendUpcomingTracks(album, currentPlayer, song)
+                                }
                             }
                         }
                     }
@@ -273,50 +346,6 @@ class MainActivity : ComponentActivity() {
             B2MusicPlayerTheme {
                 val navController = rememberNavController()
                 val scope = rememberCoroutineScope()
-
-                // Builds a Media3 item from a song, preferring a downloaded cache file.
-                fun buildMediaItem(song: Song, album: Album): MediaItem {
-                    val artist = state.artistByFileName[song.fileName]
-                    val mediaMetadata = MediaMetadata.Builder()
-                        .setTitle(song.title)
-                        .setArtist(artist)
-                        .setAlbumTitle(album.albumTitle)
-                        .setArtworkUri(album.artworkUrl?.let(Uri::parse))
-                        .build()
-                    val cachedFile = B2Utils.getCachedSong(this@MainActivity, song.fileName)
-                    return if (cachedFile != null) {
-                        Log.d(
-                            "B2_PLAYBACK",
-                            "Queue cached file for ${song.fileName}: ${cachedFile.absolutePath} (${cachedFile.length()} bytes)"
-                        )
-                        MediaItem.Builder()
-                            .setMediaId(song.fileName)
-                            .setUri(Uri.fromFile(cachedFile))
-                            .setMediaMetadata(mediaMetadata)
-                            .build()
-                    } else {
-                        val streamUrl = B2Utils.getDownloadUrl(
-                            BuildConfig.B2_BUCKET_NAME,
-                            song.fileName
-                        )
-                        Log.d("B2_PLAYBACK", "Queue streaming URL for ${song.fileName}")
-                        MediaItem.Builder()
-                            .setMediaId(song.fileName)
-                            .setUri(streamUrl)
-                            .setCustomCacheKey(song.fileName)
-                            .setMediaMetadata(mediaMetadata)
-                            .build()
-                    }
-                }
-
-                fun buildPlaybackWindow(album: Album, songIndex: Int): Pair<List<MediaItem>, Int> {
-                    val firstIndex = (songIndex - 1).coerceAtLeast(0)
-                    val lastIndex = (songIndex + 2).coerceAtMost(album.songs.lastIndex)
-                    val mediaItems = album.songs
-                        .subList(firstIndex, lastIndex + 1)
-                        .map { song -> buildMediaItem(song, album) }
-                    return mediaItems to songIndex - firstIndex
-                }
 
                 // Resolves the current song's album index using the most reliable state available.
                 fun requestedSongIndex(album: Album): Int {
