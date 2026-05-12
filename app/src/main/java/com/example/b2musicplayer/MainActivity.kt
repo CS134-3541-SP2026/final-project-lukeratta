@@ -68,6 +68,7 @@ class MainUiState : ViewModel() {
     var albumList by mutableStateOf<List<Album>>(emptyList())
     var isLoadingAlbums by mutableStateOf(true)
     var selectedAlbum by mutableStateOf<Album?>(null)
+    var playbackAlbum by mutableStateOf<Album?>(null)
     var currentSong by mutableStateOf<Song?>(null)
     var currentArtworkUrl by mutableStateOf<String?>(null)
     var currentArtist by mutableStateOf<String?>(null)
@@ -176,6 +177,11 @@ class MainActivity : ComponentActivity() {
                                 it.albumTitle == selected.albumTitle
                             } ?: selected
                         }
+                        state.playbackAlbum?.let { playbackAlbum ->
+                            state.playbackAlbum = refreshedAlbums.firstOrNull {
+                                it.albumTitle == playbackAlbum.albumTitle
+                            } ?: playbackAlbum
+                        }
                         B2Utils.saveCachedAlbums(this@MainActivity, refreshedAlbums)
                         Log.d(
                             "B2_DEBUG",
@@ -217,7 +223,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        state.selectedAlbum?.let { album ->
+                        state.playbackAlbum?.let { album ->
                             val fileName = mediaItem?.mediaId
                             val song = album.songs.firstOrNull { it.fileName == fileName }
                                 ?: album.songs.getOrNull(player?.currentMediaItemIndex ?: -1)
@@ -269,13 +275,13 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
 
                 // Builds a Media3 item from a song, preferring a downloaded cache file.
-                fun buildMediaItem(song: Song): MediaItem {
+                fun buildMediaItem(song: Song, album: Album): MediaItem {
                     val artist = state.artistByFileName[song.fileName]
                     val mediaMetadata = MediaMetadata.Builder()
                         .setTitle(song.title)
                         .setArtist(artist)
-                        .setAlbumTitle(state.selectedAlbum?.albumTitle)
-                        .setArtworkUri(state.currentArtworkUrl?.let(Uri::parse))
+                        .setAlbumTitle(album.albumTitle)
+                        .setArtworkUri(album.artworkUrl?.let(Uri::parse))
                         .build()
                     val cachedFile = B2Utils.getCachedSong(this@MainActivity, song.fileName)
                     return if (cachedFile != null) {
@@ -308,7 +314,7 @@ class MainActivity : ComponentActivity() {
                     val lastIndex = (songIndex + 2).coerceAtMost(album.songs.lastIndex)
                     val mediaItems = album.songs
                         .subList(firstIndex, lastIndex + 1)
-                        .map(::buildMediaItem)
+                        .map { song -> buildMediaItem(song, album) }
                     return mediaItems to songIndex - firstIndex
                 }
 
@@ -332,6 +338,7 @@ class MainActivity : ComponentActivity() {
                     val song = album.songs.getOrNull(songIndex) ?: return
 
                     state.currentSong = song
+                    state.playbackAlbum = album
                     state.currentArtworkUrl = album.artworkUrl
                     state.currentArtist = state.artistByFileName[song.fileName]
                     if (openBottomSheet) {
@@ -378,7 +385,7 @@ class MainActivity : ComponentActivity() {
                         return@LaunchedEffect
                     }
 
-                    state.selectedAlbum?.let { album ->
+                    state.playbackAlbum?.let { album ->
                         val nextIndex = requestedSongIndex(album) + 1
                         if (nextIndex in album.songs.indices) {
                             playSongAt(album, nextIndex)
@@ -406,7 +413,7 @@ class MainActivity : ComponentActivity() {
                 // Rebuilds the active MediaItem after activity recreation when playback state exists.
                 LaunchedEffect(state.hasLoadedAlbums, state.currentSong?.fileName) {
                     val song = state.currentSong ?: return@LaunchedEffect
-                    val album = state.selectedAlbum ?: return@LaunchedEffect
+                    val album = state.playbackAlbum ?: return@LaunchedEffect
                     val songIndex = album.songs.indexOfFirst { it.fileName == song.fileName }
                     val currentPlayer = player ?: return@LaunchedEffect
 
@@ -442,7 +449,7 @@ class MainActivity : ComponentActivity() {
                         if (state.currentSong != null) {
                             MediaControlBar(
                                 song = state.currentSong,
-                                album = state.selectedAlbum,
+                                album = state.playbackAlbum,
                                 artistName = state.currentArtist,
                                 artworkUrl = state.currentArtworkUrl,
                                 isPlaying = state.isPlaying,
@@ -450,7 +457,7 @@ class MainActivity : ComponentActivity() {
                                     if (state.isPlaying) player?.pause() else player?.play()
                                 },
                                 onNext = {
-                                    state.selectedAlbum?.let { album ->
+                                    state.playbackAlbum?.let { album ->
                                         val nextIndex = requestedSongIndex(album) + 1
                                         if (nextIndex in album.songs.indices) {
                                             playSongAt(album, nextIndex)
@@ -576,7 +583,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             PlayerDetailScreen(
                                 song = state.currentSong,
-                                album = state.selectedAlbum,
+                                album = state.playbackAlbum,
                                 artistName = state.currentArtist,
                                 artworkUrl = state.currentArtworkUrl,
                                 isPlaying = state.isPlaying,
@@ -587,7 +594,7 @@ class MainActivity : ComponentActivity() {
                                     if (state.isPlaying) player?.pause() else player?.play()
                                 },
                                 onNext = {
-                                    state.selectedAlbum?.let { album ->
+                                    state.playbackAlbum?.let { album ->
                                         val nextIndex = requestedSongIndex(album) + 1
                                         if (nextIndex in album.songs.indices) {
                                             playSongAt(album, nextIndex)
@@ -596,7 +603,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onPrevious = {
                                     player?.let { currentPlayer ->
-                                        state.selectedAlbum?.let { album ->
+                                        state.playbackAlbum?.let { album ->
                                             if (currentPlayer.currentPosition > 3000L) {
                                                 currentPlayer.seekTo(0)
                                             } else {
