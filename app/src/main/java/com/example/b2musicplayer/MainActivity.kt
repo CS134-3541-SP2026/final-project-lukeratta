@@ -968,7 +968,7 @@ fun MainScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Albums",
+                text = "Library",
                 style = MaterialTheme.typography.headlineLarge,
                 modifier = Modifier.weight(1f),
                 fontWeight = FontWeight.Bold
