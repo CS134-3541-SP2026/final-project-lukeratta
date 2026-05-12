@@ -542,6 +542,7 @@ class MainActivity : ComponentActivity() {
                         composable("sub_screen") {
                             SubScreen(
                                 album = state.selectedAlbum,
+                                currentSongFileName = state.currentSong?.fileName,
                                 onBack = { navController.popBackStack() },
                                 onTrackClick = { song ->
                                     state.selectedAlbum?.let { album ->
@@ -1047,7 +1048,12 @@ fun AlbumItem(album: Album, onClick: () -> Unit) {
 
 // Selected album screen with artwork header and numbered track list.
 @Composable
-fun SubScreen(album: Album?, onBack: () -> Unit, onTrackClick: (Song) -> Unit) {
+fun SubScreen(
+    album: Album?,
+    currentSongFileName: String?,
+    onBack: () -> Unit,
+    onTrackClick: (Song) -> Unit
+) {
     if (album == null || album.songs.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(text = "No songs found")
@@ -1091,8 +1097,23 @@ fun SubScreen(album: Album?, onBack: () -> Unit, onTrackClick: (Song) -> Unit) {
 
             // Numbered tracks; clicking a row starts playback for that song.
             itemsIndexed(album.songs) { index, song ->
+                val isCurrentSong = song.fileName == currentSongFileName
+                val rowBackground = if (isCurrentSong) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surface
+                }
+                val rowContentColor = if (isCurrentSong) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                }
+
                 Column(
-                    modifier = Modifier.clickable { onTrackClick(song) }
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(rowBackground)
+                        .clickable { onTrackClick(song) }
                 ) {
                     Row(
                         modifier = Modifier
@@ -1104,24 +1125,27 @@ fun SubScreen(album: Album?, onBack: () -> Unit, onTrackClick: (Song) -> Unit) {
                             text = "${index + 1}",
                             modifier = Modifier.width(36.dp),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                            color = rowContentColor.copy(alpha = if (isCurrentSong) 0.9f else 0.5f),
+                            fontWeight = if (isCurrentSong) FontWeight.Bold else FontWeight.Normal
                         )
                         Text(
                             text = song.title,
                             style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            color = rowContentColor,
+                            fontWeight = if (isCurrentSong) FontWeight.Bold else FontWeight.Normal
                         )
                         Icon(
-                            imageVector = Icons.Default.MoreHoriz,
-                            contentDescription = "Options",
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            imageVector = if (isCurrentSong) Icons.Default.PlayArrow else Icons.Default.MoreHoriz,
+                            contentDescription = if (isCurrentSong) "Currently playing" else "Options",
+                            tint = rowContentColor.copy(alpha = if (isCurrentSong) 0.9f else 0.5f),
                             modifier = Modifier.size(20.dp)
                         )
                     }
                     HorizontalDivider(
                         modifier = Modifier.padding(start = 52.dp, end = 16.dp),
                         thickness = 0.5.dp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                        color = rowContentColor.copy(alpha = if (isCurrentSong) 0.2f else 0.1f)
                     )
                 }
             }
