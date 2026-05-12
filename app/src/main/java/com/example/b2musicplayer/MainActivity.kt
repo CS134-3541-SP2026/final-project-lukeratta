@@ -127,6 +127,20 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            fun refreshCachedArtworkUrl(album: Album): Album {
+                val coverFileName = if (album.artworkUrl?.contains("cover.png", ignoreCase = true) == true) {
+                    "cover.png"
+                } else {
+                    "cover.jpg"
+                }
+                return album.copy(
+                    artworkUrl = B2Utils.getDownloadUrl(
+                        BuildConfig.B2_BUCKET_NAME,
+                        "MUSIC/ALBUMS/${album.albumTitle}/$coverFileName"
+                    )
+                )
+            }
+
             // Refreshes albums from B2, either incrementally or by replacing the whole cache.
             suspend fun refreshAlbumsFromB2(forceFullRefresh: Boolean) {
                 state.isLoadingAlbums = state.albumList.isEmpty()
@@ -142,7 +156,9 @@ class MainActivity : ComponentActivity() {
                     val cachedByTitle = if (forceFullRefresh) {
                         emptyMap()
                     } else {
-                        state.albumList.associateBy { it.albumTitle }
+                        state.albumList
+                            .map(::refreshCachedArtworkUrl)
+                            .associateBy { it.albumTitle }
                     }
                     val titlesToFetch = names.filterNot { cachedByTitle.containsKey(it) }
                     val fetchedAlbumsByTitle = titlesToFetch
@@ -210,6 +226,7 @@ class MainActivity : ComponentActivity() {
                                 state.currentSong = song
                                 state.currentArtworkUrl = album.artworkUrl
                                 state.currentArtist = state.artistByFileName[song.fileName]
+                                state.requestedSongFileName = song.fileName
                                 // Force duration update for the new track
                                 state.totalDuration = player?.duration?.coerceAtLeast(0L) ?: 0L
                                 state.currentPosition = player?.currentPosition ?: 0L
@@ -286,6 +303,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                fun buildPlaybackWindow(album: Album, songIndex: Int): Pair<List<MediaItem>, Int> {
+                    val firstIndex = (songIndex - 1).coerceAtLeast(0)
+                    val lastIndex = (songIndex + 2).coerceAtMost(album.songs.lastIndex)
+                    val mediaItems = album.songs
+                        .subList(firstIndex, lastIndex + 1)
+                        .map(::buildMediaItem)
+                    return mediaItems to songIndex - firstIndex
+                }
+
                 // Resolves the current song's album index using the most reliable state available.
                 fun requestedSongIndex(album: Album): Int {
                     val requestedIndex = album.songs.indexOfFirst { it.fileName == state.requestedSongFileName }
@@ -313,15 +339,14 @@ class MainActivity : ComponentActivity() {
                     }
                     state.requestedSongFileName = song.fileName
 
-                    val mediaItem = buildMediaItem(song)
-                    val selectedUri = mediaItem.localConfiguration?.uri
+                    val (mediaItems, queueIndex) = buildPlaybackWindow(album, songIndex)
+                    val selectedUri = mediaItems[queueIndex].localConfiguration?.uri
 
                     player?.let {
-                        it.setMediaItem(mediaItem)
-                        it.seekTo(0L)
+                        it.setMediaItems(mediaItems, queueIndex, 0L)
                         Log.d(
                             "B2_PLAYBACK",
-                            "Selected ${song.fileName}; albumIndex=$songIndex; uriScheme=${selectedUri?.scheme}; uri=$selectedUri"
+                            "Selected ${song.fileName}; albumIndex=$songIndex; queueIndex=$queueIndex; queueSize=${mediaItems.size}; uriScheme=${selectedUri?.scheme}; uri=$selectedUri"
                         )
                         state.playWhenReadyAfterPrepare = true
                         it.prepare()
@@ -389,8 +414,8 @@ class MainActivity : ComponentActivity() {
                         return@LaunchedEffect
                     }
 
-                    currentPlayer.setMediaItem(buildMediaItem(song))
-                    currentPlayer.seekTo(state.currentPosition)
+                    val (mediaItems, queueIndex) = buildPlaybackWindow(album, songIndex)
+                    currentPlayer.setMediaItems(mediaItems, queueIndex, state.currentPosition)
                     state.playWhenReadyAfterPrepare = state.shouldResumePlayback
                     currentPlayer.prepare()
                 }
