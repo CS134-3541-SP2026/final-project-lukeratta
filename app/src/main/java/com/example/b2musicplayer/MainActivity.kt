@@ -128,20 +128,6 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
-            fun refreshCachedArtworkUrl(album: Album): Album {
-                val coverFileName = if (album.artworkUrl?.contains("cover.png", ignoreCase = true) == true) {
-                    "cover.png"
-                } else {
-                    "cover.jpg"
-                }
-                return album.copy(
-                    artworkUrl = B2Utils.getDownloadUrl(
-                        BuildConfig.B2_BUCKET_NAME,
-                        "MUSIC/ALBUMS/${album.albumTitle}/$coverFileName"
-                    )
-                )
-            }
-
             // Refreshes albums from B2, either incrementally or by replacing the whole cache.
             suspend fun refreshAlbumsFromB2(forceFullRefresh: Boolean) {
                 state.isLoadingAlbums = state.albumList.isEmpty()
@@ -157,9 +143,7 @@ class MainActivity : ComponentActivity() {
                     val cachedByTitle = if (forceFullRefresh) {
                         emptyMap()
                     } else {
-                        state.albumList
-                            .map(::refreshCachedArtworkUrl)
-                            .associateBy { it.albumTitle }
+                        state.albumList.associateBy { it.albumTitle }
                     }
                     val titlesToFetch = names.filterNot { cachedByTitle.containsKey(it) }
                     val fetchedAlbumsByTitle = titlesToFetch
