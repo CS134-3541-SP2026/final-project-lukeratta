@@ -1,4 +1,7 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class
+)
 package com.example.b2musicplayer
 
 import android.content.ComponentName
@@ -15,8 +18,10 @@ import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -1217,6 +1222,8 @@ fun SubScreen(
             Text(text = "No songs found")
         }
     } else {
+        var contextMenuSongFileName by remember { mutableStateOf<String?>(null) }
+
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 16.dp)
@@ -1283,7 +1290,10 @@ fun SubScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(rowBackground)
-                        .clickable { onTrackClick(song) }
+                        .combinedClickable(
+                            onClick = { onTrackClick(song) },
+                            onLongClick = { contextMenuSongFileName = song.fileName }
+                        )
                 ) {
                     Row(
                         modifier = Modifier
@@ -1305,12 +1315,24 @@ fun SubScreen(
                             color = rowContentColor,
                             fontWeight = if (isCurrentSong) FontWeight.Bold else FontWeight.Normal
                         )
-                        Icon(
-                            imageVector = if (isCurrentSong) Icons.Default.PlayArrow else Icons.Default.MoreHoriz,
-                            contentDescription = if (isCurrentSong) "Currently playing" else "Options",
-                            tint = rowContentColor.copy(alpha = if (isCurrentSong) 0.9f else 0.5f),
-                            modifier = Modifier.size(20.dp)
-                        )
+                        Box {
+                            IconButton(
+                                onClick = { contextMenuSongFileName = song.fileName },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreHoriz,
+                                    contentDescription = "Track options",
+                                    tint = rowContentColor.copy(alpha = if (isCurrentSong) 0.9f else 0.5f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            TrackContextMenu(
+                                expanded = contextMenuSongFileName == song.fileName,
+                                onDismissRequest = { contextMenuSongFileName = null },
+                                onAddToQueue = { contextMenuSongFileName = null }
+                            )
+                        }
                     }
                     HorizontalDivider(
                         modifier = Modifier.padding(start = 52.dp, end = 16.dp),
@@ -1320,5 +1342,22 @@ fun SubScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun TrackContextMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    onAddToQueue: () -> Unit
+) {
+    DropdownMenu(
+        expanded = expanded,
+        onDismissRequest = onDismissRequest
+    ) {
+        DropdownMenuItem(
+            text = { Text("Add to Queue") },
+            onClick = onAddToQueue
+        )
     }
 }
