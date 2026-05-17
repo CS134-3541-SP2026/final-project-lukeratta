@@ -101,6 +101,7 @@ class MainUiState : ViewModel() {
     var playbackEndedCount by mutableIntStateOf(0)
     var showRefreshConfirmation by mutableStateOf(false)
     var loopMode by mutableStateOf(LoopMode.OFF)
+    var shuffleEnabled by mutableStateOf(false)
 }
 
 class MainActivity : ComponentActivity() {
@@ -246,6 +247,42 @@ class MainActivity : ComponentActivity() {
                 return mediaItems to songIndex - firstIndex
             }
 
+            fun orderedAlbumFor(album: Album): Album {
+                return state.albumList.firstOrNull { it.albumTitle == album.albumTitle }
+                    ?: state.selectedAlbum?.takeIf { it.albumTitle == album.albumTitle }
+                    ?: album
+            }
+
+            fun shuffledAlbumStartingWith(album: Album, song: Song): Album {
+                val remainingSongs = album.songs
+                    .filterNot { it.fileName == song.fileName }
+                    .shuffled()
+                return album.copy(songs = listOf(song) + remainingSongs)
+            }
+
+            fun rebuildPlaybackQueue(
+                album: Album,
+                song: Song,
+                positionMs: Long,
+                resumePlayback: Boolean
+            ) {
+                val songIndex = album.songs.indexOfFirst { it.fileName == song.fileName }
+                val currentPlayer = player ?: return
+                if (songIndex == -1) {
+                    return
+                }
+
+                val (mediaItems, queueIndex) = buildPlaybackWindow(album, songIndex)
+                currentPlayer.repeatMode = if (state.loopMode == LoopMode.TRACK) {
+                    Player.REPEAT_MODE_ONE
+                } else {
+                    Player.REPEAT_MODE_OFF
+                }
+                currentPlayer.setMediaItems(mediaItems, queueIndex, positionMs)
+                state.playWhenReadyAfterPrepare = resumePlayback
+                currentPlayer.prepare()
+            }
+
             fun appendUpcomingTracks(album: Album, currentPlayer: MediaController, currentSong: Song) {
                 val currentAlbumIndex = album.songs.indexOfFirst { it.fileName == currentSong.fileName }
                 val mediaItemCount = currentPlayer.mediaItemCount
@@ -369,19 +406,33 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // Starts playback for one album track and kicks off background caching/metadata reads.
-                fun playSongAt(album: Album, songIndex: Int, openBottomSheet: Boolean = false) {
+                fun playSongAt(
+                    album: Album,
+                    songIndex: Int,
+                    openBottomSheet: Boolean = false,
+                    reshuffleForPlayback: Boolean = false
+                ) {
                     val song = album.songs.getOrNull(songIndex) ?: return
+                    val playbackAlbum = if (state.shuffleEnabled && reshuffleForPlayback) {
+                        shuffledAlbumStartingWith(orderedAlbumFor(album), song)
+                    } else {
+                        album
+                    }
+                    val playbackSongIndex = playbackAlbum.songs.indexOfFirst { it.fileName == song.fileName }
+                    if (playbackSongIndex == -1) {
+                        return
+                    }
 
                     state.currentSong = song
-                    state.playbackAlbum = album
-                    state.currentArtworkUrl = album.artworkUrl
+                    state.playbackAlbum = playbackAlbum
+                    state.currentArtworkUrl = playbackAlbum.artworkUrl
                     state.currentArtist = state.artistByFileName[song.fileName]
                     if (openBottomSheet) {
                         state.showBottomSheet = true
                     }
                     state.requestedSongFileName = song.fileName
 
-                    val (mediaItems, queueIndex) = buildPlaybackWindow(album, songIndex)
+                    val (mediaItems, queueIndex) = buildPlaybackWindow(playbackAlbum, playbackSongIndex)
                     val selectedUri = mediaItems[queueIndex].localConfiguration?.uri
 
                     player?.let {
@@ -393,7 +444,7 @@ class MainActivity : ComponentActivity() {
                         it.setMediaItems(mediaItems, queueIndex, 0L)
                         Log.d(
                             "B2_PLAYBACK",
-                            "Selected ${song.fileName}; albumIndex=$songIndex; queueIndex=$queueIndex; queueSize=${mediaItems.size}; uriScheme=${selectedUri?.scheme}; uri=$selectedUri"
+                            "Selected ${song.fileName}; albumIndex=$playbackSongIndex; queueIndex=$queueIndex; queueSize=${mediaItems.size}; shuffled=${state.shuffleEnabled}; uriScheme=${selectedUri?.scheme}; uri=$selectedUri"
                         )
                         state.playWhenReadyAfterPrepare = true
                         it.prepare()
@@ -544,7 +595,12 @@ class MainActivity : ComponentActivity() {
                                             val songIndex = album.songs.indexOf(song)
                                             if (songIndex != -1) {
                                                 val shouldOpenBottomSheet = !state.hasAutoOpenedBottomSheet
-                                                playSongAt(album, songIndex, openBottomSheet = shouldOpenBottomSheet)
+                                                playSongAt(
+                                                    album,
+                                                    songIndex,
+                                                    openBottomSheet = shouldOpenBottomSheet,
+                                                    reshuffleForPlayback = true
+                                                )
                                                 if (shouldOpenBottomSheet) {
                                                     state.hasAutoOpenedBottomSheet = true
                                                 }
@@ -641,9 +697,32 @@ class MainActivity : ComponentActivity() {
                                 currentPosition = state.currentPosition,
                                 totalDuration = state.totalDuration,
                                 loopMode = state.loopMode,
+                                shuffleEnabled = state.shuffleEnabled,
                                 onSeek = { pos -> player?.seekTo(pos) },
                                 onPlayPause = {
                                     if (state.isPlaying) player?.pause() else player?.play()
+                                },
+                                onShuffleClick = {
+                                    val song = state.currentSong
+                                    val currentPlaybackAlbum = state.playbackAlbum
+                                    if (song != null && currentPlaybackAlbum != null) {
+                                        val currentPlayer = player
+                                        val positionMs = currentPlayer?.currentPosition ?: state.currentPosition
+                                        val resumePlayback = currentPlayer?.isPlaying == true
+                                        state.shuffleEnabled = !state.shuffleEnabled
+                                        val nextPlaybackAlbum = if (state.shuffleEnabled) {
+                                            shuffledAlbumStartingWith(orderedAlbumFor(currentPlaybackAlbum), song)
+                                        } else {
+                                            orderedAlbumFor(currentPlaybackAlbum)
+                                        }
+                                        state.playbackAlbum = nextPlaybackAlbum
+                                        rebuildPlaybackQueue(
+                                            album = nextPlaybackAlbum,
+                                            song = song,
+                                            positionMs = positionMs,
+                                            resumePlayback = resumePlayback
+                                        )
+                                    }
                                 },
                                 onLoopClick = {
                                     state.loopMode = state.loopMode.next()
@@ -833,8 +912,10 @@ fun PlayerDetailScreen(
     currentPosition: Long,
     totalDuration: Long,
     loopMode: LoopMode,
+    shuffleEnabled: Boolean,
     onSeek: (Long) -> Unit,
     onPlayPause: () -> Unit,
+    onShuffleClick: () -> Unit,
     onLoopClick: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit
@@ -884,10 +965,19 @@ fun PlayerDetailScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = {}) {
+            IconButton(onClick = onShuffleClick) {
                 Icon(
                     imageVector = Icons.Default.Shuffle,
-                    contentDescription = "Shuffle"
+                    contentDescription = if (shuffleEnabled) {
+                        "Shuffle on"
+                    } else {
+                        "Shuffle off"
+                    },
+                    tint = if (shuffleEnabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
                 )
             }
             IconButton(onClick = onLoopClick) {
