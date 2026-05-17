@@ -22,14 +22,20 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -39,15 +45,23 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.DensityMedium
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -68,6 +82,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 enum class LoopMode {
     OFF,
@@ -107,6 +122,7 @@ class MainUiState : ViewModel() {
     var showRefreshConfirmation by mutableStateOf(false)
     var loopMode by mutableStateOf(LoopMode.OFF)
     var shuffleEnabled by mutableStateOf(false)
+    var showPlayerQueue by mutableStateOf(false)
 }
 
 class MainActivity : ComponentActivity() {
@@ -692,7 +708,10 @@ class MainActivity : ComponentActivity() {
                     // Expanded player sheet with artwork, progress, and transport controls.
                     if (state.showBottomSheet) {
                         ModalBottomSheet(
-                            onDismissRequest = { state.showBottomSheet = false },
+                            onDismissRequest = {
+                                state.showPlayerQueue = false
+                                state.showBottomSheet = false
+                            },
                             sheetState = sheetState,
                             dragHandle = {
                                 Box(
@@ -701,6 +720,7 @@ class MainActivity : ComponentActivity() {
                                         .clickable {
                                             scope.launch {
                                                 sheetState.hide()
+                                                state.showPlayerQueue = false
                                                 state.showBottomSheet = false
                                             }
                                         },
@@ -720,6 +740,31 @@ class MainActivity : ComponentActivity() {
                                 totalDuration = state.totalDuration,
                                 loopMode = state.loopMode,
                                 shuffleEnabled = state.shuffleEnabled,
+                                showQueueView = state.showPlayerQueue,
+                                onQueueViewChange = { state.showPlayerQueue = it },
+                                onQueueReorder = { reorderedUpcomingSongs ->
+                                    val song = state.currentSong
+                                    val currentPlaybackAlbum = state.playbackAlbum
+                                    val currentPlayer = player
+                                    if (song != null && currentPlaybackAlbum != null && currentPlayer != null) {
+                                        val currentIndex = currentPlaybackAlbum.songs.indexOfFirst {
+                                            it.fileName == song.fileName
+                                        }
+                                        if (currentIndex != -1) {
+                                            val reorderedAlbum = currentPlaybackAlbum.copy(
+                                                songs = currentPlaybackAlbum.songs.take(currentIndex + 1) +
+                                                    reorderedUpcomingSongs
+                                            )
+                                            state.playbackAlbum = reorderedAlbum
+                                            rebuildPlaybackQueue(
+                                                album = reorderedAlbum,
+                                                song = song,
+                                                positionMs = currentPlayer.currentPosition,
+                                                resumePlayback = currentPlayer.isPlaying
+                                            )
+                                        }
+                                    }
+                                },
                                 onSeek = { pos -> player?.seekTo(pos) },
                                 onPlayPause = {
                                     if (state.isPlaying) player?.pause() else player?.play()
@@ -921,6 +966,9 @@ fun PlayerDetailScreen(
     totalDuration: Long,
     loopMode: LoopMode,
     shuffleEnabled: Boolean,
+    showQueueView: Boolean,
+    onQueueViewChange: (Boolean) -> Unit,
+    onQueueReorder: (List<Song>) -> Unit,
     onSeek: (Long) -> Unit,
     onPlayPause: () -> Unit,
     onShuffleClick: () -> Unit,
@@ -928,6 +976,42 @@ fun PlayerDetailScreen(
     onNext: () -> Unit,
     onPrevious: () -> Unit
 ) {
+    val queueTracks = album?.songs.orEmpty()
+    val currentQueueIndex = queueTracks.indexOfFirst { it.fileName == song?.fileName }
+    val upcomingTracks = if (currentQueueIndex == -1) {
+        emptyList()
+    } else {
+        queueTracks.drop(currentQueueIndex + 1)
+    }
+    val queueListState = rememberLazyListState()
+    val rowHeightPx = with(LocalDensity.current) { 60.dp.toPx() }
+    var visibleQueueTracks by remember { mutableStateOf(upcomingTracks) }
+    var draggedTrackFileName by remember { mutableStateOf<String?>(null) }
+    var draggedOffsetY by remember { mutableFloatStateOf(0f) }
+    val latestVisibleQueueTracks by rememberUpdatedState(visibleQueueTracks)
+
+    LaunchedEffect(upcomingTracks, draggedTrackFileName) {
+        if (draggedTrackFileName == null) {
+            visibleQueueTracks = upcomingTracks
+        }
+    }
+
+    fun moveVisibleQueueTrack(fromIndex: Int, toIndex: Int) {
+        if (fromIndex == toIndex || fromIndex !in visibleQueueTracks.indices) {
+            return
+        }
+
+        val boundedToIndex = toIndex.coerceIn(visibleQueueTracks.indices)
+        visibleQueueTracks = visibleQueueTracks.toMutableList().apply {
+            add(boundedToIndex, removeAt(fromIndex))
+        }
+    }
+
+    fun finishQueueDrag() {
+        draggedTrackFileName = null
+        draggedOffsetY = 0f
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -935,38 +1019,196 @@ fun PlayerDetailScreen(
             .padding(horizontal = 32.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.Start
     ) {
-        Spacer(modifier = Modifier.height(16.dp))
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f),
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            shape = RoundedCornerShape(24.dp)
-        ) {
-            AsyncImage(
-                model = artworkUrl,
-                contentDescription = "Large Album Art",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .alpha(if (showQueueView) 0f else 1f)
+            ) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(24.dp)
+                ) {
+                    AsyncImage(
+                        model = artworkUrl,
+                        contentDescription = "Large Album Art",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(48.dp))
+
+                Text(
+                    text = song?.title ?: "Track Title",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                Text(
+                    text = artistName ?: album?.albumTitle ?: "Album Title",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            if (showQueueView) {
+                Column(modifier = Modifier.matchParentSize()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            modifier = Modifier.size(72.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            AsyncImage(
+                                model = artworkUrl,
+                                contentDescription = "Album Art",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = song?.title ?: "Track Title",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = artistName ?: album?.albumTitle ?: "Album Title",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    LazyColumn(
+                        state = queueListState,
+                        userScrollEnabled = draggedTrackFileName == null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .pointerInput(queueListState) {
+                                awaitEachGesture {
+                                    awaitFirstDown(
+                                        requireUnconsumed = false,
+                                        pass = PointerEventPass.Final
+                                    )
+                                    do {
+                                        val event = awaitPointerEvent(PointerEventPass.Final)
+                                        event.changes.forEach { change ->
+                                            val dragDelta = change.positionChange()
+                                            val isPullingDownAtQueueTop =
+                                                dragDelta.y > 0f && !queueListState.canScrollBackward
+                                            if (isPullingDownAtQueueTop) {
+                                                change.consume()
+                                            }
+                                        }
+                                    } while (event.changes.any { it.pressed })
+                                }
+                            }
+                    ) {
+                        itemsIndexed(
+                            items = visibleQueueTracks,
+                            key = { _, queuedSong -> queuedSong.fileName }
+                        ) { index, queuedSong ->
+                            val isDraggedTrack = draggedTrackFileName == queuedSong.fileName
+                            Row(
+                                modifier = Modifier
+                                    .animateItem()
+                                    .offset {
+                                        IntOffset(
+                                            x = 0,
+                                            y = if (isDraggedTrack) draggedOffsetY.roundToInt() else 0
+                                        )
+                                    }
+                                    .shadow(
+                                        elevation = if (isDraggedTrack) 8.dp else 0.dp,
+                                        shape = RoundedCornerShape(8.dp)
+                                    )
+                                    .fillMaxWidth()
+                                    .background(MaterialTheme.colorScheme.surface)
+                                    .padding(vertical = 10.dp, horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    modifier = Modifier.size(40.dp),
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    AsyncImage(
+                                        model = artworkUrl,
+                                        contentDescription = "Queued track album art",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = queuedSong.title,
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.DensityMedium,
+                                    contentDescription = "Reorder track",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .pointerInput(queuedSong.fileName, index, rowHeightPx) {
+                                            detectDragGestures(
+                                                onDragStart = {
+                                                    draggedTrackFileName = queuedSong.fileName
+                                                    draggedOffsetY = 0f
+                                                },
+                                                onDragEnd = {
+                                                    finishQueueDrag()
+                                                    onQueueReorder(latestVisibleQueueTracks)
+                                                },
+                                                onDragCancel = {
+                                                    finishQueueDrag()
+                                                    visibleQueueTracks = upcomingTracks
+                                                },
+                                                onDrag = { change, dragAmount ->
+                                                    change.consume()
+                                                    draggedOffsetY += dragAmount.y
+                                                    val currentIndex = visibleQueueTracks.indexOfFirst {
+                                                        it.fileName == queuedSong.fileName
+                                                    }
+                                                    val rowOffset = (draggedOffsetY / rowHeightPx).toInt()
+                                                    val targetIndex = (currentIndex + rowOffset)
+                                                        .coerceIn(visibleQueueTracks.indices)
+                                                    if (currentIndex != -1 && targetIndex != currentIndex) {
+                                                        moveVisibleQueueTrack(currentIndex, targetIndex)
+                                                        draggedOffsetY -= rowOffset * rowHeightPx
+                                                    }
+                                                }
+                                            )
+                                        }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
-        
-        Spacer(modifier = Modifier.height(48.dp))
-        
-        Text(
-            text = song?.title ?: "Track Title",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1
-        )
-        Text(
-            text = artistName ?: album?.albumTitle ?: "Album Title",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1
-        )
-        
-        Spacer(modifier = Modifier.height(4.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1099,6 +1341,44 @@ fun PlayerDetailScreen(
                     imageVector = Icons.Default.SkipNext, 
                     contentDescription = "Next", 
                     modifier = Modifier.size(40.dp)
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = {}, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    imageVector = Icons.Default.MoreHoriz,
+                    contentDescription = "More options",
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(24.dp))
+            IconButton(onClick = {}, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = "Speaker",
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(24.dp))
+            IconButton(
+                onClick = { onQueueViewChange(!showQueueView) },
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                    contentDescription = "Queue",
+                    modifier = Modifier.size(22.dp),
+                    tint = if (showQueueView) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
                 )
             }
         }
