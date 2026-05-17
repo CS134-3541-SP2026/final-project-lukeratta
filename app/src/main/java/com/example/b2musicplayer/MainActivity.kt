@@ -479,6 +479,22 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                fun playPreviousTrack(album: Album, currentPlayer: MediaController) {
+                    if (currentPlayer.currentPosition > 3000L) {
+                        currentPlayer.seekTo(0)
+                        return
+                    }
+
+                    val previousIndex = requestedSongIndex(album) - 1
+                    when {
+                        previousIndex in album.songs.indices -> playSongAt(album, previousIndex)
+                        state.loopMode == LoopMode.ALBUM && album.songs.isNotEmpty() -> {
+                            playSongAt(album, album.songs.lastIndex)
+                        }
+                        else -> currentPlayer.seekTo(0)
+                    }
+                }
+
                 // Advances to the next album track when the single queued MediaItem finishes.
                 LaunchedEffect(state.playbackEndedCount) {
                     if (state.playbackEndedCount == 0) {
@@ -739,16 +755,7 @@ class MainActivity : ComponentActivity() {
                                 onPrevious = {
                                     player?.let { currentPlayer ->
                                         state.playbackAlbum?.let { album ->
-                                            if (currentPlayer.currentPosition > 3000L) {
-                                                currentPlayer.seekTo(0)
-                                            } else {
-                                                val previousIndex = requestedSongIndex(album) - 1
-                                                if (previousIndex in album.songs.indices) {
-                                                    playSongAt(album, previousIndex)
-                                                } else {
-                                                    currentPlayer.seekTo(0)
-                                                }
-                                            }
+                                            playPreviousTrack(album, currentPlayer)
                                         }
                                     }
                                 }
