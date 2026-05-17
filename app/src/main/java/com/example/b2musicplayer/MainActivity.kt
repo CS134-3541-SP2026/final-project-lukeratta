@@ -470,6 +470,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                fun playNextTrack(album: Album) {
+                    val currentIndex = requestedSongIndex(album)
+                    val nextIndex = currentIndex + 1
+                    when {
+                        nextIndex in album.songs.indices -> playSongAt(album, nextIndex)
+                        state.loopMode == LoopMode.ALBUM && album.songs.isNotEmpty() -> playSongAt(album, 0)
+                    }
+                }
+
                 // Advances to the next album track when the single queued MediaItem finishes.
                 LaunchedEffect(state.playbackEndedCount) {
                     if (state.playbackEndedCount == 0) {
@@ -478,13 +487,10 @@ class MainActivity : ComponentActivity() {
 
                     state.playbackAlbum?.let { album ->
                         val currentIndex = requestedSongIndex(album)
-                        val nextIndex = currentIndex + 1
-                        when {
-                            nextIndex in album.songs.indices -> playSongAt(album, nextIndex)
-                            state.loopMode == LoopMode.ALBUM && album.songs.isNotEmpty() -> playSongAt(album, 0)
-                            state.loopMode == LoopMode.TRACK && currentIndex in album.songs.indices -> {
-                                playSongAt(album, currentIndex)
-                            }
+                        if (state.loopMode == LoopMode.TRACK && currentIndex in album.songs.indices) {
+                            playSongAt(album, currentIndex)
+                        } else {
+                            playNextTrack(album)
                         }
                     }
                 }
@@ -624,12 +630,7 @@ class MainActivity : ComponentActivity() {
                                         if (state.isPlaying) player?.pause() else player?.play()
                                     },
                                     onNext = {
-                                        state.playbackAlbum?.let { album ->
-                                            val nextIndex = requestedSongIndex(album) + 1
-                                            if (nextIndex in album.songs.indices) {
-                                                playSongAt(album, nextIndex)
-                                            }
-                                        }
+                                        state.playbackAlbum?.let(::playNextTrack)
                                     },
                                     onClick = { state.showBottomSheet = true }
                                 )
@@ -733,12 +734,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onNext = {
-                                    state.playbackAlbum?.let { album ->
-                                        val nextIndex = requestedSongIndex(album) + 1
-                                        if (nextIndex in album.songs.indices) {
-                                            playSongAt(album, nextIndex)
-                                        }
-                                    }
+                                    state.playbackAlbum?.let(::playNextTrack)
                                 },
                                 onPrevious = {
                                     player?.let { currentPlayer ->
