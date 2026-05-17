@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -45,7 +46,6 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.DensityMedium
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -633,6 +633,7 @@ class MainActivity : ComponentActivity() {
                                 SubScreen(
                                     album = state.selectedAlbum,
                                     currentSongFileName = state.currentSong?.fileName,
+                                    isPlaying = state.isPlaying,
                                     onBack = { navController.popBackStack() },
                                     onTrackClick = { song ->
                                         state.selectedAlbum?.let { album ->
@@ -1505,6 +1506,7 @@ fun AlbumItem(album: Album, onClick: () -> Unit) {
 fun SubScreen(
     album: Album?,
     currentSongFileName: String?,
+    isPlaying: Boolean,
     onBack: () -> Unit,
     onTrackClick: (Song) -> Unit
 ) {
@@ -1592,13 +1594,24 @@ fun SubScreen(
                             .padding(vertical = 12.dp, horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "${index + 1}",
+                        Box(
                             modifier = Modifier.width(36.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = rowContentColor.copy(alpha = if (isCurrentSong) 0.9f else 0.5f),
-                            fontWeight = if (isCurrentSong) FontWeight.Bold else FontWeight.Normal
-                        )
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (isCurrentSong) {
+                                PlayingEqualizerIcon(
+                                    isPlaying = isPlaying,
+                                    color = rowContentColor.copy(alpha = 0.9f),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            } else {
+                                Text(
+                                    text = "${index + 1}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = rowContentColor.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
                         Text(
                             text = song.title,
                             style = MaterialTheme.typography.bodyLarge,
@@ -1607,27 +1620,16 @@ fun SubScreen(
                             fontWeight = if (isCurrentSong) FontWeight.Bold else FontWeight.Normal
                         )
                         Box {
-                            if (isCurrentSong) {
+                            IconButton(
+                                onClick = { contextMenuSongFileName = song.fileName },
+                                modifier = Modifier.size(32.dp)
+                            ) {
                                 Icon(
-                                    imageVector = Icons.Default.GraphicEq,
-                                    contentDescription = "Currently playing",
-                                    tint = rowContentColor.copy(alpha = 0.9f),
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .padding(6.dp)
+                                    imageVector = Icons.Default.MoreHoriz,
+                                    contentDescription = "Track options",
+                                    tint = rowContentColor.copy(alpha = if (isCurrentSong) 0.9f else 0.5f),
+                                    modifier = Modifier.size(20.dp)
                                 )
-                            } else {
-                                IconButton(
-                                    onClick = { contextMenuSongFileName = song.fileName },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.MoreHoriz,
-                                        contentDescription = "Track options",
-                                        tint = rowContentColor.copy(alpha = 0.5f),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
                             }
                             TrackContextMenu(
                                 expanded = contextMenuSongFileName == song.fileName,
@@ -1645,6 +1647,55 @@ fun SubScreen(
             }
         }
     }
+}
+
+@Composable
+fun PlayingEqualizerIcon(
+    isPlaying: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PlayingEqualizerBar(isPlaying = isPlaying, color = color, initialFraction = 0.2f, targetFraction = 0.55f, durationMillis = 620)
+        PlayingEqualizerBar(isPlaying = isPlaying, color = color, initialFraction = 0.8f, targetFraction = 0.2f, durationMillis = 780)
+        PlayingEqualizerBar(isPlaying = isPlaying, color = color, initialFraction = 0.2f, targetFraction = 1f, durationMillis = 540)
+        PlayingEqualizerBar(isPlaying = isPlaying, color = color, initialFraction = 0.75f, targetFraction = 0.2f, durationMillis = 690)
+        PlayingEqualizerBar(isPlaying = isPlaying, color = color, initialFraction = 0.2f, targetFraction = 0.5f, durationMillis = 480)
+    }
+}
+
+@Composable
+fun PlayingEqualizerBar(
+    isPlaying: Boolean,
+    color: Color,
+    initialFraction: Float,
+    targetFraction: Float,
+    durationMillis: Int
+) {
+    val heightFraction = remember { Animatable(initialFraction) }
+
+    LaunchedEffect(isPlaying) {
+        if (!isPlaying) {
+            return@LaunchedEffect
+        }
+
+        var nextTarget = targetFraction
+        while (true) {
+            heightFraction.animateTo(nextTarget, animationSpec = tween(durationMillis = durationMillis))
+            nextTarget = if (nextTarget == targetFraction) initialFraction else targetFraction
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .width(2.dp)
+            .fillMaxHeight(heightFraction.value)
+            .background(color = color, shape = RoundedCornerShape(2.dp))
+    )
 }
 
 @Composable
