@@ -456,92 +456,97 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    bottomBar = {
-                        // Mini player shown whenever a track has been selected.
-                        if (state.currentSong != null) {
-                            MediaControlBar(
-                                song = state.currentSong,
-                                album = state.playbackAlbum,
-                                artistName = state.currentArtist,
-                                artworkUrl = state.currentArtworkUrl,
-                                isPlaying = state.isPlaying,
-                                onPlayPause = {
-                                    if (state.isPlaying) player?.pause() else player?.play()
-                                },
-                                onNext = {
-                                    state.playbackAlbum?.let { album ->
-                                        val nextIndex = requestedSongIndex(album) + 1
-                                        if (nextIndex in album.songs.indices) {
-                                            playSongAt(album, nextIndex)
-                                        }
-                                    }
-                                },
-                                onClick = { state.showBottomSheet = true }
-                            )
-                        }
-                    }
-                ) { innerPadding ->
-                    // Two-screen navigation: album list and selected album track list.
-                    NavHost(
-                        navController = navController,
-                        startDestination = "main_screen",
-                        modifier = Modifier.padding(innerPadding),
-                        enterTransition = {
-                            slideIntoContainer(
-                                towards = AnimatedContentTransitionScope.SlideDirection.Left,
-                                animationSpec = tween(500)
-                            )
-                        },
-                        exitTransition = {
-                            slideOutOfContainer(
-                                towards = AnimatedContentTransitionScope.SlideDirection.Left,
-                                animationSpec = tween(500)
-                            )
-                        },
-                        popEnterTransition = {
-                            slideIntoContainer(
-                                towards = AnimatedContentTransitionScope.SlideDirection.Right,
-                                animationSpec = tween(500)
-                            )
-                        },
-                        popExitTransition = {
-                            slideOutOfContainer(
-                                towards = AnimatedContentTransitionScope.SlideDirection.Right,
-                                animationSpec = tween(500)
-                            )
-                        }
+                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
                     ) {
-                        composable("main_screen") {
-                            MainScreen(
-                                albums = state.albumList,
-                                isLoadingAlbums = state.isLoadingAlbums,
-                                onRefreshClick = { state.showRefreshConfirmation = true },
-                                onNavigateToSub = { album ->
-                                    state.selectedAlbum = album
-                                    navController.navigate("sub_screen")
-                                }
-                            )
-                        }
-                        composable("sub_screen") {
-                            SubScreen(
-                                album = state.selectedAlbum,
-                                currentSongFileName = state.currentSong?.fileName,
-                                onBack = { navController.popBackStack() },
-                                onTrackClick = { song ->
-                                    state.selectedAlbum?.let { album ->
-                                        val songIndex = album.songs.indexOf(song)
-                                        if (songIndex != -1) {
-                                            val shouldOpenBottomSheet = !state.hasAutoOpenedBottomSheet
-                                            playSongAt(album, songIndex, openBottomSheet = shouldOpenBottomSheet)
-                                            if (shouldOpenBottomSheet) {
-                                                state.hasAutoOpenedBottomSheet = true
+                        // Two-screen navigation: album list and selected album track list.
+                        NavHost(
+                            navController = navController,
+                            startDestination = "main_screen",
+                            modifier = Modifier.fillMaxSize(),
+                            enterTransition = {
+                                slideIntoContainer(
+                                    towards = AnimatedContentTransitionScope.SlideDirection.Left,
+                                    animationSpec = tween(500)
+                                )
+                            },
+                            exitTransition = {
+                                slideOutOfContainer(
+                                    towards = AnimatedContentTransitionScope.SlideDirection.Left,
+                                    animationSpec = tween(500)
+                                )
+                            },
+                            popEnterTransition = {
+                                slideIntoContainer(
+                                    towards = AnimatedContentTransitionScope.SlideDirection.Right,
+                                    animationSpec = tween(500)
+                                )
+                            },
+                            popExitTransition = {
+                                slideOutOfContainer(
+                                    towards = AnimatedContentTransitionScope.SlideDirection.Right,
+                                    animationSpec = tween(500)
+                                )
+                            }
+                        ) {
+                            composable("main_screen") {
+                                MainScreen(
+                                    albums = state.albumList,
+                                    isLoadingAlbums = state.isLoadingAlbums,
+                                    onRefreshClick = { state.showRefreshConfirmation = true },
+                                    onNavigateToSub = { album ->
+                                        state.selectedAlbum = album
+                                        navController.navigate("sub_screen")
+                                    }
+                                )
+                            }
+                            composable("sub_screen") {
+                                SubScreen(
+                                    album = state.selectedAlbum,
+                                    currentSongFileName = state.currentSong?.fileName,
+                                    onBack = { navController.popBackStack() },
+                                    onTrackClick = { song ->
+                                        state.selectedAlbum?.let { album ->
+                                            val songIndex = album.songs.indexOf(song)
+                                            if (songIndex != -1) {
+                                                val shouldOpenBottomSheet = !state.hasAutoOpenedBottomSheet
+                                                playSongAt(album, songIndex, openBottomSheet = shouldOpenBottomSheet)
+                                                if (shouldOpenBottomSheet) {
+                                                    state.hasAutoOpenedBottomSheet = true
+                                                }
                                             }
                                         }
                                     }
-                                }
-                            )
+                                )
+                            }
+                        }
+
+                        // Mini player overlays content so the area around its rounded corners is transparent.
+                        if (state.currentSong != null) {
+                            Box(modifier = Modifier.align(Alignment.BottomCenter)) {
+                                MediaControlBar(
+                                    song = state.currentSong,
+                                    album = state.playbackAlbum,
+                                    artistName = state.currentArtist,
+                                    artworkUrl = state.currentArtworkUrl,
+                                    isPlaying = state.isPlaying,
+                                    onPlayPause = {
+                                        if (state.isPlaying) player?.pause() else player?.play()
+                                    },
+                                    onNext = {
+                                        state.playbackAlbum?.let { album ->
+                                            val nextIndex = requestedSongIndex(album) + 1
+                                            if (nextIndex in album.songs.indices) {
+                                                playSongAt(album, nextIndex)
+                                            }
+                                        }
+                                    },
+                                    onClick = { state.showBottomSheet = true }
+                                )
+                            }
                         }
                     }
 
@@ -715,7 +720,8 @@ fun MediaControlBar(
             .padding(16.dp),
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.primaryContainer,
-        tonalElevation = 8.dp
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Row(
             modifier = Modifier
