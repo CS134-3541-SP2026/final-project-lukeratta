@@ -29,6 +29,9 @@ import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.*
@@ -61,6 +64,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+enum class LoopMode {
+    OFF,
+    ALBUM,
+    TRACK;
+
+    fun next(): LoopMode {
+        return when (this) {
+            OFF -> ALBUM
+            ALBUM -> TRACK
+            TRACK -> OFF
+        }
+    }
+}
+
 // Holds Compose-observed UI and playback state across configuration changes.
 class MainUiState : ViewModel() {
     var authStatusMessage by mutableStateOf<String?>(null)
@@ -83,6 +100,7 @@ class MainUiState : ViewModel() {
     var shouldResumePlayback by mutableStateOf(false)
     var playbackEndedCount by mutableIntStateOf(0)
     var showRefreshConfirmation by mutableStateOf(false)
+    var loopMode by mutableStateOf(LoopMode.OFF)
 }
 
 class MainActivity : ComponentActivity() {
@@ -238,7 +256,10 @@ class MainActivity : ComponentActivity() {
 
                 val lastQueuedFileName = currentPlayer.getMediaItemAt(mediaItemCount - 1).mediaId
                 val lastQueuedAlbumIndex = album.songs.indexOfFirst { it.fileName == lastQueuedFileName }
-                val firstAppendIndex = (lastQueuedAlbumIndex + 1).coerceAtLeast(currentAlbumIndex + 1)
+                var firstAppendIndex = (lastQueuedAlbumIndex + 1).coerceAtLeast(currentAlbumIndex + 1)
+                if (firstAppendIndex !in album.songs.indices && state.loopMode == LoopMode.ALBUM) {
+                    firstAppendIndex = 0
+                }
                 if (firstAppendIndex !in album.songs.indices) {
                     return
                 }
@@ -364,6 +385,11 @@ class MainActivity : ComponentActivity() {
                     val selectedUri = mediaItems[queueIndex].localConfiguration?.uri
 
                     player?.let {
+                        it.repeatMode = if (state.loopMode == LoopMode.TRACK) {
+                            Player.REPEAT_MODE_ONE
+                        } else {
+                            Player.REPEAT_MODE_OFF
+                        }
                         it.setMediaItems(mediaItems, queueIndex, 0L)
                         Log.d(
                             "B2_PLAYBACK",
@@ -400,9 +426,14 @@ class MainActivity : ComponentActivity() {
                     }
 
                     state.playbackAlbum?.let { album ->
-                        val nextIndex = requestedSongIndex(album) + 1
-                        if (nextIndex in album.songs.indices) {
-                            playSongAt(album, nextIndex)
+                        val currentIndex = requestedSongIndex(album)
+                        val nextIndex = currentIndex + 1
+                        when {
+                            nextIndex in album.songs.indices -> playSongAt(album, nextIndex)
+                            state.loopMode == LoopMode.ALBUM && album.songs.isNotEmpty() -> playSongAt(album, 0)
+                            state.loopMode == LoopMode.TRACK && currentIndex in album.songs.indices -> {
+                                playSongAt(album, currentIndex)
+                            }
                         }
                     }
                 }
@@ -609,9 +640,18 @@ class MainActivity : ComponentActivity() {
                                 isPlaying = state.isPlaying,
                                 currentPosition = state.currentPosition,
                                 totalDuration = state.totalDuration,
+                                loopMode = state.loopMode,
                                 onSeek = { pos -> player?.seekTo(pos) },
                                 onPlayPause = {
                                     if (state.isPlaying) player?.pause() else player?.play()
+                                },
+                                onLoopClick = {
+                                    state.loopMode = state.loopMode.next()
+                                    player?.repeatMode = if (state.loopMode == LoopMode.TRACK) {
+                                        Player.REPEAT_MODE_ONE
+                                    } else {
+                                        Player.REPEAT_MODE_OFF
+                                    }
                                 },
                                 onNext = {
                                     state.playbackAlbum?.let { album ->
@@ -792,8 +832,10 @@ fun PlayerDetailScreen(
     isPlaying: Boolean,
     currentPosition: Long,
     totalDuration: Long,
+    loopMode: LoopMode,
     onSeek: (Long) -> Unit,
     onPlayPause: () -> Unit,
+    onLoopClick: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit
 ) {
@@ -835,7 +877,39 @@ fun PlayerDetailScreen(
             maxLines = 1
         )
         
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = {}) {
+                Icon(
+                    imageVector = Icons.Default.Shuffle,
+                    contentDescription = "Shuffle"
+                )
+            }
+            IconButton(onClick = onLoopClick) {
+                Icon(
+                    imageVector = if (loopMode == LoopMode.TRACK) {
+                        Icons.Default.RepeatOne
+                    } else {
+                        Icons.Default.Repeat
+                    },
+                    contentDescription = when (loopMode) {
+                        LoopMode.OFF -> "Loop off"
+                        LoopMode.ALBUM -> "Loop album"
+                        LoopMode.TRACK -> "Loop track"
+                    },
+                    tint = if (loopMode == LoopMode.OFF) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                )
+            }
+        }
 
         // Custom progress bar that matches the app's current color scheme.
         Column(modifier = Modifier.fillMaxWidth()) {
