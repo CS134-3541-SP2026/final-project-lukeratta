@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.DensityMedium
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -1606,16 +1607,27 @@ fun SubScreen(
                             fontWeight = if (isCurrentSong) FontWeight.Bold else FontWeight.Normal
                         )
                         Box {
-                            IconButton(
-                                onClick = { contextMenuSongFileName = song.fileName },
-                                modifier = Modifier.size(32.dp)
-                            ) {
+                            if (isCurrentSong) {
                                 Icon(
-                                    imageVector = Icons.Default.MoreHoriz,
-                                    contentDescription = "Track options",
-                                    tint = rowContentColor.copy(alpha = if (isCurrentSong) 0.9f else 0.5f),
-                                    modifier = Modifier.size(20.dp)
+                                    imageVector = Icons.Default.GraphicEq,
+                                    contentDescription = "Currently playing",
+                                    tint = rowContentColor.copy(alpha = 0.9f),
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .padding(6.dp)
                                 )
+                            } else {
+                                IconButton(
+                                    onClick = { contextMenuSongFileName = song.fileName },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.MoreHoriz,
+                                        contentDescription = "Track options",
+                                        tint = rowContentColor.copy(alpha = 0.5f),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                             TrackContextMenu(
                                 expanded = contextMenuSongFileName == song.fileName,
