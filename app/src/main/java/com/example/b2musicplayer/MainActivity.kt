@@ -1328,7 +1328,7 @@ fun PlayerDetailScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1342,11 +1342,11 @@ fun PlayerDetailScreen(
                     modifier = Modifier.size(40.dp)
                 )
             }
-            FilledIconButton(onClick = onPlayPause, modifier = Modifier.size(80.dp)) {
+            IconButton(onClick = onPlayPause, modifier = Modifier.size(80.dp)) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = if (isPlaying) "Pause" else "Play",
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier.size(64.dp)
                 )
             }
             IconButton(onClick = onNext, modifier = Modifier.size(64.dp)) {
@@ -1357,10 +1357,10 @@ fun PlayerDetailScreen(
                 )
             }
         }
-
+        Spacer(modifier = Modifier.height(16.dp))
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = {}, modifier = Modifier.size(40.dp)) {
@@ -1370,7 +1370,6 @@ fun PlayerDetailScreen(
                     modifier = Modifier.size(22.dp)
                 )
             }
-            Spacer(modifier = Modifier.width(24.dp))
             IconButton(onClick = {}, modifier = Modifier.size(40.dp)) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.VolumeUp,
@@ -1378,7 +1377,6 @@ fun PlayerDetailScreen(
                     modifier = Modifier.size(22.dp)
                 )
             }
-            Spacer(modifier = Modifier.width(24.dp))
             IconButton(
                 onClick = { onQueueViewChange(!showQueueView) },
                 modifier = Modifier.size(40.dp)
