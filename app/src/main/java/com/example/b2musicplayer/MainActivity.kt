@@ -22,7 +22,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
@@ -51,8 +50,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -82,6 +81,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 enum class LoopMode {
@@ -989,6 +989,7 @@ fun PlayerDetailScreen(
     var draggedTrackFileName by remember { mutableStateOf<String?>(null) }
     var draggedOffsetY by remember { mutableFloatStateOf(0f) }
     val latestVisibleQueueTracks by rememberUpdatedState(visibleQueueTracks)
+    val queueScope = rememberCoroutineScope()
 
     LaunchedEffect(upcomingTracks, draggedTrackFileName) {
         if (draggedTrackFileName == null) {
@@ -1005,11 +1006,24 @@ fun PlayerDetailScreen(
         visibleQueueTracks = visibleQueueTracks.toMutableList().apply {
             add(boundedToIndex, removeAt(fromIndex))
         }
+        if (fromIndex == 0 || boundedToIndex == 0) {
+            queueScope.launch {
+                queueListState.scrollToItem(0)
+            }
+        }
     }
 
     fun finishQueueDrag() {
         draggedTrackFileName = null
         draggedOffsetY = 0f
+    }
+
+    fun rowOffsetForDrag(offset: Float): Int {
+        return if (offset >= 0f) {
+            floor(offset / rowHeightPx).toInt()
+        } else {
+            -floor(-offset / rowHeightPx).toInt()
+        }
     }
 
     Column(
@@ -1137,10 +1151,6 @@ fun PlayerDetailScreen(
                                             y = if (isDraggedTrack) draggedOffsetY.roundToInt() else 0
                                         )
                                     }
-                                    .shadow(
-                                        elevation = if (isDraggedTrack) 8.dp else 0.dp,
-                                        shape = RoundedCornerShape(8.dp)
-                                    )
                                     .fillMaxWidth()
                                     .background(MaterialTheme.colorScheme.surface)
                                     .padding(vertical = 10.dp, horizontal = 8.dp),
@@ -1171,36 +1181,44 @@ fun PlayerDetailScreen(
                                     contentDescription = "Reorder track",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier
-                                        .size(40.dp)
-                                        .pointerInput(queuedSong.fileName, index, rowHeightPx) {
-                                            detectDragGestures(
-                                                onDragStart = {
-                                                    draggedTrackFileName = queuedSong.fileName
-                                                    draggedOffsetY = 0f
-                                                },
-                                                onDragEnd = {
-                                                    finishQueueDrag()
-                                                    onQueueReorder(latestVisibleQueueTracks)
-                                                },
-                                                onDragCancel = {
-                                                    finishQueueDrag()
-                                                    visibleQueueTracks = upcomingTracks
-                                                },
-                                                onDrag = { change, dragAmount ->
-                                                    change.consume()
-                                                    draggedOffsetY += dragAmount.y
-                                                    val currentIndex = visibleQueueTracks.indexOfFirst {
-                                                        it.fileName == queuedSong.fileName
+                                        .size(28.dp)
+                                        .pointerInput(queuedSong.fileName, rowHeightPx) {
+                                            awaitEachGesture {
+                                                awaitFirstDown(
+                                                    requireUnconsumed = false,
+                                                    pass = PointerEventPass.Initial
+                                                ).consume()
+                                                draggedTrackFileName = queuedSong.fileName
+                                                draggedOffsetY = 0f
+
+                                                do {
+                                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                    var dragY = 0f
+                                                    event.changes.forEach { change ->
+                                                        if (change.pressed) {
+                                                            dragY += change.positionChange().y
+                                                            change.consume()
+                                                        }
                                                     }
-                                                    val rowOffset = (draggedOffsetY / rowHeightPx).toInt()
-                                                    val targetIndex = (currentIndex + rowOffset)
-                                                        .coerceIn(visibleQueueTracks.indices)
-                                                    if (currentIndex != -1 && targetIndex != currentIndex) {
-                                                        moveVisibleQueueTrack(currentIndex, targetIndex)
-                                                        draggedOffsetY -= rowOffset * rowHeightPx
+
+                                                    if (dragY != 0f) {
+                                                        draggedOffsetY += dragY
+                                                        val currentIndex = visibleQueueTracks.indexOfFirst {
+                                                            it.fileName == queuedSong.fileName
+                                                        }
+                                                        val rowOffset = rowOffsetForDrag(draggedOffsetY)
+                                                        val targetIndex = (currentIndex + rowOffset)
+                                                            .coerceIn(visibleQueueTracks.indices)
+                                                        if (currentIndex != -1 && targetIndex != currentIndex) {
+                                                            moveVisibleQueueTrack(currentIndex, targetIndex)
+                                                            draggedOffsetY -= rowOffset * rowHeightPx
+                                                        }
                                                     }
-                                                }
-                                            )
+                                                } while (event.changes.any { it.pressed })
+
+                                                onQueueReorder(latestVisibleQueueTracks)
+                                                finishQueueDrag()
+                                            }
                                         }
                                 )
                             }
@@ -1260,39 +1278,34 @@ fun PlayerDetailScreen(
                 onValueChange = { percent ->
                     onSeek((percent * totalDuration).toLong())
                 },
-                modifier = Modifier.fillMaxWidth(),
-                thumb = {
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .offset(y = 2.dp)
-                            .background(trackColor, CircleShape)
-                    )
-                },
-                track = {
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(24.dp),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.Transparent,
+                    activeTrackColor = trackColor,
+                    inactiveTrackColor = trackColor.copy(alpha = 0.24f)
+                ),
+                thumb = {},
+                track = { sliderState ->
                     Canvas(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(12.dp)
+                            .height(4.dp)
                     ) {
-                        val width = size.width
-                        val centerY = size.height / 2
-                        val strokeWidth = 4.dp.toPx()
-                        
-                        // Inactive
+                        val y = size.height / 2f
                         drawLine(
-                            color = trackColor.copy(alpha = 0.2f),
-                            start = Offset(0f, centerY),
-                            end = Offset(width, centerY),
-                            strokeWidth = strokeWidth,
+                            color = trackColor.copy(alpha = 0.24f),
+                            start = Offset(0f, y),
+                            end = Offset(size.width, y),
+                            strokeWidth = size.height,
                             cap = StrokeCap.Round
                         )
-                        // Active
                         drawLine(
                             color = trackColor,
-                            start = Offset(0f, centerY),
-                            end = Offset(width * progress, centerY),
-                            strokeWidth = strokeWidth,
+                            start = Offset(0f, y),
+                            end = Offset(size.width * sliderState.value, y),
+                            strokeWidth = size.height,
                             cap = StrokeCap.Round
                         )
                     }
@@ -1315,8 +1328,8 @@ fun PlayerDetailScreen(
             }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
-        
+        Spacer(modifier = Modifier.height(32.dp))
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -1324,22 +1337,22 @@ fun PlayerDetailScreen(
         ) {
             IconButton(onClick = onPrevious, modifier = Modifier.size(64.dp)) {
                 Icon(
-                    imageVector = Icons.Default.SkipPrevious, 
-                    contentDescription = "Prev", 
+                    imageVector = Icons.Default.SkipPrevious,
+                    contentDescription = "Previous Track",
                     modifier = Modifier.size(40.dp)
                 )
             }
-            IconButton(onClick = onPlayPause, modifier = Modifier.size(80.dp)) {
+            FilledIconButton(onClick = onPlayPause, modifier = Modifier.size(80.dp)) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = if (isPlaying) "Pause" else "Play",
-                    modifier = Modifier.size(64.dp)
+                    modifier = Modifier.size(48.dp)
                 )
             }
             IconButton(onClick = onNext, modifier = Modifier.size(64.dp)) {
                 Icon(
-                    imageVector = Icons.Default.SkipNext, 
-                    contentDescription = "Next", 
+                    imageVector = Icons.Default.SkipNext,
+                    contentDescription = "Next Track",
                     modifier = Modifier.size(40.dp)
                 )
             }
@@ -1386,7 +1399,6 @@ fun PlayerDetailScreen(
         Spacer(modifier = Modifier.height(48.dp))
     }
 }
-
 // Formats milliseconds as m:ss for the player progress labels.
 private fun formatTime(ms: Long): String {
     val totalSeconds = ms / 1000
