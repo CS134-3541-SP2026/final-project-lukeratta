@@ -28,6 +28,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -86,7 +87,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.floor
 import kotlin.math.roundToInt
 
 enum class LoopMode {
@@ -1040,6 +1040,47 @@ fun MediaControlBar(
 
 }
 
+@Composable
+fun QueueTrackRow(
+    song: Song,
+    artworkUrl: String?,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(vertical = 10.dp, horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            modifier = Modifier.size(40.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            shape = RoundedCornerShape(6.dp)
+        ) {
+            AsyncImage(
+                model = artworkUrl,
+                contentDescription = "Queued track album art",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = song.title,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1
+        )
+        Icon(
+            imageVector = Icons.Default.DensityMedium,
+            contentDescription = "Reorder track",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(28.dp)
+        )
+    }
+}
+
 // Full player controls displayed inside the modal bottom sheet.
 @Composable
 fun PlayerDetailScreen(
@@ -1072,10 +1113,16 @@ fun PlayerDetailScreen(
         queueTracks.drop(currentQueueIndex + 1)
     }
     val queueListState = rememberLazyListState()
-    val rowHeightPx = with(LocalDensity.current) { 60.dp.toPx() }
+    val density = LocalDensity.current
+    val rowHeightPx = with(density) { 60.dp.toPx() }
+    val queueAutoScrollEdgePx = with(density) { 10.dp.toPx() }
+    val queueAutoScrollMaxStepPx = with(density) { 15.dp.toPx() }
+    val queueHandleTouchWidthPx = with(density) { 56.dp.toPx() }
     var visibleQueueTracks by remember { mutableStateOf(upcomingTracks) }
     var draggedTrackFileName by remember { mutableStateOf<String?>(null) }
-    var draggedOffsetY by remember { mutableFloatStateOf(0f) }
+    var dragFingerY by remember { mutableFloatStateOf(Float.NaN) }
+    var settlingTrackFileName by remember { mutableStateOf<String?>(null) }
+    val settlingOffsetY = remember { Animatable(0f) }
     val latestVisibleQueueTracks by rememberUpdatedState(visibleQueueTracks)
     val queueScope = rememberCoroutineScope()
 
@@ -1101,17 +1148,82 @@ fun PlayerDetailScreen(
         }
     }
 
-    fun finishQueueDrag() {
-        draggedTrackFileName = null
-        draggedOffsetY = 0f
+    fun updateDraggedTrackPlacement(fileName: String, fingerY: Float) {
+        if (fingerY.isNaN()) {
+            return
+        }
+
+        val currentIndex = visibleQueueTracks.indexOfFirst { it.fileName == fileName }
+        val visibleItems = queueListState.layoutInfo.visibleItemsInfo
+        if (currentIndex == -1 || visibleItems.isEmpty()) {
+            return
+        }
+
+        val targetIndex = when {
+            fingerY <= visibleItems.first().offset + visibleItems.first().size / 2f -> {
+                visibleItems.first().index
+            }
+            fingerY >= visibleItems.last().offset + visibleItems.last().size / 2f -> {
+                visibleItems.last().index
+            }
+            else -> {
+                visibleItems
+                    .firstOrNull { itemInfo ->
+                        fingerY < itemInfo.offset + itemInfo.size / 2f
+                    }
+                    ?.index ?: currentIndex
+            }
+        }.coerceIn(visibleQueueTracks.indices)
+
+        if (targetIndex != currentIndex) {
+            moveVisibleQueueTrack(currentIndex, targetIndex)
+        }
     }
 
-    fun rowOffsetForDrag(offset: Float): Int {
-        return if (offset >= 0f) {
-            floor(offset / rowHeightPx).toInt()
-        } else {
-            -floor(-offset / rowHeightPx).toInt()
+    fun finishQueueDrag() {
+        draggedTrackFileName = null
+        dragFingerY = Float.NaN
+    }
+
+    fun releaseOffsetForDraggedTrack(fileName: String, fingerY: Float): Float {
+        val finalRow = queueListState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == fileName }
+            ?: return 0f
+        return fingerY - rowHeightPx / 2f - finalRow.offset
+    }
+
+    LaunchedEffect(draggedTrackFileName) {
+        while (draggedTrackFileName != null) {
+            withFrameNanos { }
+            if (dragFingerY.isNaN()) {
+                continue
+            }
+            val viewportStart = queueListState.layoutInfo.viewportStartOffset
+            val viewportEnd = queueListState.layoutInfo.viewportEndOffset
+            val scrollAmount = when {
+                dragFingerY <= viewportStart + queueAutoScrollEdgePx -> {
+                    val distanceIntoEdge = viewportStart + queueAutoScrollEdgePx - dragFingerY
+                    val speedFraction = (distanceIntoEdge / queueAutoScrollEdgePx).coerceIn(0f, 1f)
+                    -queueAutoScrollMaxStepPx * speedFraction
+                }
+                dragFingerY >= viewportEnd - queueAutoScrollEdgePx -> {
+                    val distanceIntoEdge = dragFingerY - (viewportEnd - queueAutoScrollEdgePx)
+                    val speedFraction = (distanceIntoEdge / queueAutoScrollEdgePx).coerceIn(0f, 1f)
+                    queueAutoScrollMaxStepPx * speedFraction
+                }
+                else -> 0f
+            }
+            if (scrollAmount != 0f) {
+                queueListState.scrollBy(scrollAmount)
+            }
+            draggedTrackFileName?.let { fileName ->
+                updateDraggedTrackPlacement(fileName, dragFingerY)
+            }
         }
+    }
+
+    val draggedTrack = draggedTrackFileName?.let { fileName ->
+        visibleQueueTracks.firstOrNull { it.fileName == fileName }
     }
 
     Column(
@@ -1162,7 +1274,26 @@ fun PlayerDetailScreen(
             }
 
             if (showQueueView) {
-                Column(modifier = Modifier.matchParentSize()) {
+                Column(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .pointerInput(Unit) {
+                            awaitEachGesture {
+                                awaitFirstDown(
+                                    requireUnconsumed = false,
+                                    pass = PointerEventPass.Final
+                                )
+                                do {
+                                    val event = awaitPointerEvent(PointerEventPass.Final)
+                                    if (draggedTrackFileName != null) {
+                                        event.changes.forEach { change ->
+                                            change.consume()
+                                        }
+                                    }
+                                } while (event.changes.any { it.pressed })
+                            }
+                        }
+                ) {
                     Spacer(modifier = Modifier.height(16.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1199,122 +1330,144 @@ fun PlayerDetailScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    LazyColumn(
-                        state = queueListState,
-                        userScrollEnabled = draggedTrackFileName == null,
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
-                            .pointerInput(queueListState) {
-                                awaitEachGesture {
-                                    awaitFirstDown(
-                                        requireUnconsumed = false,
-                                        pass = PointerEventPass.Final
-                                    )
-                                    do {
-                                        val event = awaitPointerEvent(PointerEventPass.Final)
-                                        event.changes.forEach { change ->
-                                            val dragDelta = change.positionChange()
-                                            val isPullingDownAtQueueTop =
-                                                dragDelta.y > 0f && !queueListState.canScrollBackward
-                                            if (isPullingDownAtQueueTop) {
-                                                change.consume()
-                                            }
-                                        }
-                                    } while (event.changes.any { it.pressed })
-                                }
-                            }
                     ) {
-                        itemsIndexed(
-                            items = visibleQueueTracks,
-                            key = { _, queuedSong -> queuedSong.fileName }
-                        ) { index, queuedSong ->
-                            val isDraggedTrack = draggedTrackFileName == queuedSong.fileName
-                            val rowModifier = if (isDraggedTrack) {
-                                Modifier
-                            } else {
-                                Modifier.animateItem()
+                        LazyColumn(
+                            state = queueListState,
+                            userScrollEnabled = draggedTrackFileName == null,
+                            modifier = Modifier
+                                .matchParentSize()
+                                .pointerInput(queueListState, rowHeightPx, queueHandleTouchWidthPx) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(
+                                            requireUnconsumed = false,
+                                            pass = PointerEventPass.Initial
+                                        )
+                                        val pressedItemInfo = queueListState.layoutInfo.visibleItemsInfo
+                                            .firstOrNull { itemInfo ->
+                                                down.position.y >= itemInfo.offset &&
+                                                    down.position.y <= itemInfo.offset + itemInfo.size
+                                            }
+                                        val pressedTrackFileName = pressedItemInfo?.key as? String
+                                        val isHandlePress = pressedTrackFileName != null &&
+                                            down.position.x >= size.width - queueHandleTouchWidthPx
+
+                                        if (isHandlePress) {
+                                            down.consume()
+                                            draggedTrackFileName = pressedTrackFileName
+                                            dragFingerY = down.position.y
+
+                                            do {
+                                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                var dragY = 0f
+                                                event.changes.forEach { change ->
+                                                    if (change.pressed) {
+                                                        dragY += change.positionChange().y
+                                                        change.consume()
+                                                    }
+                                                }
+
+                                                if (dragY != 0f) {
+                                                    if (!dragFingerY.isNaN()) {
+                                                        dragFingerY += dragY
+                                                    }
+                                                    updateDraggedTrackPlacement(
+                                                        fileName = pressedTrackFileName,
+                                                        fingerY = dragFingerY
+                                                    )
+                                                }
+                                            } while (event.changes.any { it.pressed })
+
+                                            val releasedTrackFileName = draggedTrackFileName
+                                            val releasedOffsetY = if (releasedTrackFileName == null) {
+                                                0f
+                                            } else {
+                                                releaseOffsetForDraggedTrack(
+                                                    fileName = releasedTrackFileName,
+                                                    fingerY = dragFingerY
+                                                )
+                                            }
+                                            onQueueReorder(latestVisibleQueueTracks)
+                                            finishQueueDrag()
+                                            if (releasedTrackFileName != null && releasedOffsetY != 0f) {
+                                                settlingTrackFileName = releasedTrackFileName
+                                                queueScope.launch {
+                                                    settlingOffsetY.snapTo(releasedOffsetY)
+                                                    settlingOffsetY.animateTo(
+                                                        targetValue = 0f,
+                                                        animationSpec = tween(durationMillis = 160)
+                                                    )
+                                                    if (settlingTrackFileName == releasedTrackFileName) {
+                                                        settlingTrackFileName = null
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            do {
+                                                val event = awaitPointerEvent(PointerEventPass.Final)
+                                                event.changes.forEach { change ->
+                                                    val dragDelta = change.positionChange()
+                                                    val isPullingDownAtQueueTop =
+                                                        dragDelta.y > 0f && !queueListState.canScrollBackward
+                                                    if (isPullingDownAtQueueTop) {
+                                                        change.consume()
+                                                    }
+                                                }
+                                            } while (event.changes.any { it.pressed })
+                                        }
+                                    }
+                                }
+                        ) {
+                            itemsIndexed(
+                                items = visibleQueueTracks,
+                                key = { _, queuedSong -> queuedSong.fileName }
+                            ) { index, queuedSong ->
+                                val isDraggedTrack = draggedTrackFileName == queuedSong.fileName
+                                val isSettlingTrack = settlingTrackFileName == queuedSong.fileName
+                                val rowModifier = if (isDraggedTrack) {
+                                    Modifier
+                                } else {
+                                    Modifier.animateItem()
+                                }
+                                QueueTrackRow(
+                                    song = queuedSong,
+                                    artworkUrl = artworkUrlForSong(queuedSong) ?: artworkUrl,
+                                    modifier = rowModifier
+                                        .zIndex(if (isSettlingTrack) 1f else 0f)
+                                        .alpha(if (isDraggedTrack) 0f else 1f)
+                                        .offset {
+                                            val offsetY = if (isSettlingTrack) {
+                                                settlingOffsetY.value
+                                            } else {
+                                                0f
+                                            }
+                                            IntOffset(
+                                                x = 0,
+                                                y = offsetY.roundToInt()
+                                            )
+                                        }
+                                        .fillMaxWidth()
+                                )
                             }
-                            Row(
-                                modifier = rowModifier
-                                    .zIndex(if (isDraggedTrack) 1f else 0f)
+                        }
+
+                        if (draggedTrack != null && !dragFingerY.isNaN()) {
+                            QueueTrackRow(
+                                song = draggedTrack,
+                                artworkUrl = artworkUrlForSong(draggedTrack) ?: artworkUrl,
+                                modifier = Modifier
+                                    .zIndex(2f)
                                     .offset {
                                         IntOffset(
                                             x = 0,
-                                            y = if (isDraggedTrack) draggedOffsetY.roundToInt() else 0
+                                            y = (dragFingerY - rowHeightPx / 2f).roundToInt()
                                         )
                                     }
                                     .fillMaxWidth()
-                                    .background(MaterialTheme.colorScheme.surface)
-                                    .padding(vertical = 10.dp, horizontal = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Surface(
-                                    modifier = Modifier.size(40.dp),
-                                    color = MaterialTheme.colorScheme.secondaryContainer,
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    AsyncImage(
-                                        model = artworkUrlForSong(queuedSong) ?: artworkUrl,
-                                        contentDescription = "Queued track album art",
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Text(
-                                    text = queuedSong.title,
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1
-                                )
-                                Icon(
-                                    imageVector = Icons.Default.DensityMedium,
-                                    contentDescription = "Reorder track",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .pointerInput(queuedSong.fileName, rowHeightPx) {
-                                            awaitEachGesture {
-                                                awaitFirstDown(
-                                                    requireUnconsumed = false,
-                                                    pass = PointerEventPass.Initial
-                                                ).consume()
-                                                draggedTrackFileName = queuedSong.fileName
-                                                draggedOffsetY = 0f
-
-                                                do {
-                                                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                                                    var dragY = 0f
-                                                    event.changes.forEach { change ->
-                                                        if (change.pressed) {
-                                                            dragY += change.positionChange().y
-                                                            change.consume()
-                                                        }
-                                                    }
-
-                                                    if (dragY != 0f) {
-                                                        draggedOffsetY += dragY
-                                                        val currentIndex = visibleQueueTracks.indexOfFirst {
-                                                            it.fileName == queuedSong.fileName
-                                                        }
-                                                        val rowOffset = rowOffsetForDrag(draggedOffsetY)
-                                                        val targetIndex = (currentIndex + rowOffset)
-                                                            .coerceIn(visibleQueueTracks.indices)
-                                                        if (currentIndex != -1 && targetIndex != currentIndex) {
-                                                            moveVisibleQueueTrack(currentIndex, targetIndex)
-                                                            draggedOffsetY -= rowOffset * rowHeightPx
-                                                        }
-                                                    }
-                                                } while (event.changes.any { it.pressed })
-
-                                                onQueueReorder(latestVisibleQueueTracks)
-                                                finishQueueDrag()
-                                            }
-                                        }
-                                )
-                            }
+                            )
                         }
                     }
                 }
@@ -1421,7 +1574,7 @@ fun PlayerDetailScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1450,9 +1603,9 @@ fun PlayerDetailScreen(
                 )
             }
         }
-        Spacer(modifier = Modifier.height(16.dp))
+
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
