@@ -359,6 +359,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            fun albumWithTrackMovedToEnd(album: Album, song: Song): Album {
+                val songIndex = album.songs.indexOfFirst { it.fileName == song.fileName }
+                if (songIndex == -1 || album.songs.size < 2) {
+                    return album
+                }
+
+                val rotatedSongs = album.songs.toMutableList().apply {
+                    add(removeAt(songIndex))
+                }
+                return album.copy(songs = rotatedSongs)
+            }
+
             fun addTrackToPlaybackQueue(song: Song, playNext: Boolean) {
                 val currentSong = state.currentSong ?: return
                 val currentPlaybackAlbum = state.playbackAlbum ?: return
@@ -452,11 +464,22 @@ class MainActivity : ComponentActivity() {
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                         state.playbackAlbum?.let { album ->
                             val fileName = mediaItem?.mediaId
+                            val previousSong = state.currentSong
                             val song = album.songs.firstOrNull { it.fileName == fileName }
                                 ?: album.songs.getOrNull(player?.currentMediaItemIndex ?: -1)
 
                             if (song != null) {
-                                val sourceAlbum = sourceAlbumForSong(song, album)
+                                val playbackAlbum = if (
+                                    state.loopMode == LoopMode.ALBUM &&
+                                    previousSong != null &&
+                                    previousSong.fileName != song.fileName
+                                ) {
+                                    albumWithTrackMovedToEnd(album, previousSong)
+                                } else {
+                                    album
+                                }
+                                val sourceAlbum = sourceAlbumForSong(song, playbackAlbum)
+                                state.playbackAlbum = playbackAlbum
                                 state.currentSong = song
                                 state.currentArtworkUrl = sourceAlbum.artworkUrl
                                 state.currentArtist = state.artistByFileName[song.fileName]
@@ -465,7 +488,11 @@ class MainActivity : ComponentActivity() {
                                 state.totalDuration = player?.duration?.coerceAtLeast(0L) ?: 0L
                                 state.currentPosition = player?.currentPosition ?: 0L
                                 player?.let { currentPlayer ->
-                                    appendUpcomingTracks(album, currentPlayer, song)
+                                    if (state.loopMode == LoopMode.ALBUM) {
+                                        syncUpcomingMediaItems(playbackAlbum, song, currentPlayer)
+                                    } else {
+                                        appendUpcomingTracks(playbackAlbum, currentPlayer, song)
+                                    }
                                 }
                             }
                         }
@@ -587,6 +614,23 @@ class MainActivity : ComponentActivity() {
 
                 fun playNextTrack(album: Album) {
                     val currentIndex = requestedSongIndex(album)
+                    val currentSong = album.songs.getOrNull(currentIndex)
+                    if (
+                        state.loopMode == LoopMode.ALBUM &&
+                        currentSong != null &&
+                        album.songs.size > 1
+                    ) {
+                        val nextSong = album.songs.getOrNull(currentIndex + 1) ?: album.songs.first()
+                        val rotatedAlbum = albumWithTrackMovedToEnd(album, currentSong)
+                        val nextIndex = rotatedAlbum.songs.indexOfFirst {
+                            it.fileName == nextSong.fileName
+                        }
+                        if (nextIndex != -1) {
+                            playSongAt(rotatedAlbum, nextIndex)
+                        }
+                        return
+                    }
+
                     val nextIndex = currentIndex + 1
                     when {
                         nextIndex in album.songs.indices -> playSongAt(album, nextIndex)
