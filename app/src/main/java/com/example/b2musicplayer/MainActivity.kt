@@ -7,10 +7,13 @@ package com.example.b2musicplayer
 import android.content.ComponentName
 import android.media.AudioAttributes as AndroidAudioAttributes
 import android.media.AudioFormat
+import android.media.MediaRouter2
 import android.media.AudioTrack
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -225,14 +228,34 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            fun orderedAlbumFor(album: Album): Album {
+                return state.albumList.firstOrNull { it.albumTitle == album.albumTitle }
+                    ?: state.selectedAlbum?.takeIf { it.albumTitle == album.albumTitle }
+                    ?: album
+            }
+
+            fun shuffledAlbumStartingWith(album: Album, song: Song): Album {
+                val remainingSongs = album.songs
+                    .filterNot { it.fileName == song.fileName }
+                    .shuffled()
+                return album.copy(songs = listOf(song) + remainingSongs)
+            }
+
+            fun sourceAlbumForSong(song: Song, fallbackAlbum: Album): Album {
+                return state.albumList.firstOrNull { album ->
+                    album.songs.any { it.fileName == song.fileName }
+                } ?: fallbackAlbum
+            }
+
             // Builds a Media3 item from a song, preferring a downloaded cache file.
             fun buildMediaItem(song: Song, album: Album): MediaItem {
                 val artist = state.artistByFileName[song.fileName]
+                val sourceAlbum = sourceAlbumForSong(song, album)
                 val mediaMetadata = MediaMetadata.Builder()
                     .setTitle(song.title)
                     .setArtist(artist)
-                    .setAlbumTitle(album.albumTitle)
-                    .setArtworkUri(album.artworkUrl?.let(Uri::parse))
+                    .setAlbumTitle(sourceAlbum.albumTitle)
+                    .setArtworkUri(sourceAlbum.artworkUrl?.let(Uri::parse))
                     .build()
                 val cachedFile = B2Utils.getCachedSong(this@MainActivity, song.fileName)
                 return if (cachedFile != null) {
@@ -260,6 +283,26 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            fun showAudioOutputSwitcher() {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    val didShow = MediaRouter2.getInstance(this@MainActivity)
+                        .showSystemOutputSwitcher()
+                    if (!didShow) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Audio output picker is unavailable",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                } else {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Audio output picker requires Android 14 or newer",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+
             fun buildPlaybackWindow(album: Album, songIndex: Int): Pair<List<MediaItem>, Int> {
                 val firstIndex = (songIndex - 1).coerceAtLeast(0)
                 val lastIndex = (songIndex + 2).coerceAtMost(album.songs.lastIndex)
@@ -267,19 +310,6 @@ class MainActivity : ComponentActivity() {
                     .subList(firstIndex, lastIndex + 1)
                     .map { song -> buildMediaItem(song, album) }
                 return mediaItems to songIndex - firstIndex
-            }
-
-            fun orderedAlbumFor(album: Album): Album {
-                return state.albumList.firstOrNull { it.albumTitle == album.albumTitle }
-                    ?: state.selectedAlbum?.takeIf { it.albumTitle == album.albumTitle }
-                    ?: album
-            }
-
-            fun shuffledAlbumStartingWith(album: Album, song: Song): Album {
-                val remainingSongs = album.songs
-                    .filterNot { it.fileName == song.fileName }
-                    .shuffled()
-                return album.copy(songs = listOf(song) + remainingSongs)
             }
 
             fun rebuildPlaybackQueue(
@@ -303,6 +333,39 @@ class MainActivity : ComponentActivity() {
                 currentPlayer.setMediaItems(mediaItems, queueIndex, positionMs)
                 state.playWhenReadyAfterPrepare = resumePlayback
                 currentPlayer.prepare()
+            }
+
+            fun addTrackToPlaybackQueue(song: Song, playNext: Boolean) {
+                val currentSong = state.currentSong ?: return
+                val currentPlaybackAlbum = state.playbackAlbum ?: return
+                val currentPlayer = player ?: return
+                val currentIndex = currentPlaybackAlbum.songs.indexOfFirst {
+                    it.fileName == currentSong.fileName
+                }
+                if (currentIndex == -1) {
+                    return
+                }
+
+                val queueWithoutExistingUpcomingCopy = currentPlaybackAlbum.songs.filterIndexed { index, queuedSong ->
+                    index <= currentIndex || queuedSong.fileName != song.fileName
+                }
+                val insertIndex = if (playNext) {
+                    currentIndex + 1
+                } else {
+                    queueWithoutExistingUpcomingCopy.size
+                }
+                val updatedQueue = queueWithoutExistingUpcomingCopy.toMutableList().apply {
+                    add(insertIndex.coerceIn(0, size), song)
+                }
+                val updatedAlbum = currentPlaybackAlbum.copy(songs = updatedQueue)
+
+                state.playbackAlbum = updatedAlbum
+                rebuildPlaybackQueue(
+                    album = updatedAlbum,
+                    song = currentSong,
+                    positionMs = currentPlayer.currentPosition,
+                    resumePlayback = currentPlayer.isPlaying
+                )
             }
 
             fun appendUpcomingTracks(album: Album, currentPlayer: MediaController, currentSong: Song) {
@@ -364,8 +427,9 @@ class MainActivity : ComponentActivity() {
                                 ?: album.songs.getOrNull(player?.currentMediaItemIndex ?: -1)
 
                             if (song != null) {
+                                val sourceAlbum = sourceAlbumForSong(song, album)
                                 state.currentSong = song
-                                state.currentArtworkUrl = album.artworkUrl
+                                state.currentArtworkUrl = sourceAlbum.artworkUrl
                                 state.currentArtist = state.artistByFileName[song.fileName]
                                 state.requestedSongFileName = song.fileName
                                 // Force duration update for the new track
@@ -447,7 +511,7 @@ class MainActivity : ComponentActivity() {
 
                     state.currentSong = song
                     state.playbackAlbum = playbackAlbum
-                    state.currentArtworkUrl = playbackAlbum.artworkUrl
+                    state.currentArtworkUrl = sourceAlbumForSong(song, playbackAlbum).artworkUrl
                     state.currentArtist = state.artistByFileName[song.fileName]
                     if (openBottomSheet) {
                         state.showBottomSheet = true
@@ -635,6 +699,8 @@ class MainActivity : ComponentActivity() {
                                     currentSongFileName = state.currentSong?.fileName,
                                     isPlaying = state.isPlaying,
                                     onBack = { navController.popBackStack() },
+                                    onPlayNext = { song -> addTrackToPlaybackQueue(song, playNext = true) },
+                                    onAddToQueue = { song -> addTrackToPlaybackQueue(song, playNext = false) },
                                     onTrackClick = { song ->
                                         state.selectedAlbum?.let { album ->
                                             val songIndex = album.songs.indexOf(song)
@@ -737,6 +803,11 @@ class MainActivity : ComponentActivity() {
                                 album = state.playbackAlbum,
                                 artistName = state.currentArtist,
                                 artworkUrl = state.currentArtworkUrl,
+                                artworkUrlForSong = { queuedSong ->
+                                    state.playbackAlbum?.let { playbackAlbum ->
+                                        sourceAlbumForSong(queuedSong, playbackAlbum).artworkUrl
+                                    }
+                                },
                                 isPlaying = state.isPlaying,
                                 currentPosition = state.currentPosition,
                                 totalDuration = state.totalDuration,
@@ -771,6 +842,7 @@ class MainActivity : ComponentActivity() {
                                 onPlayPause = {
                                     if (state.isPlaying) player?.pause() else player?.play()
                                 },
+                                onAudioOutputClick = { showAudioOutputSwitcher() },
                                 onShuffleClick = {
                                     val song = state.currentSong
                                     val currentPlaybackAlbum = state.playbackAlbum
@@ -963,6 +1035,7 @@ fun PlayerDetailScreen(
     album: Album?,
     artistName: String?,
     artworkUrl: String?,
+    artworkUrlForSong: (Song) -> String?,
     isPlaying: Boolean,
     currentPosition: Long,
     totalDuration: Long,
@@ -973,6 +1046,7 @@ fun PlayerDetailScreen(
     onQueueReorder: (List<Song>) -> Unit,
     onSeek: (Long) -> Unit,
     onPlayPause: () -> Unit,
+    onAudioOutputClick: () -> Unit,
     onShuffleClick: () -> Unit,
     onLoopClick: () -> Unit,
     onNext: () -> Unit,
@@ -1164,7 +1238,7 @@ fun PlayerDetailScreen(
                                     shape = RoundedCornerShape(6.dp)
                                 ) {
                                     AsyncImage(
-                                        model = artworkUrl,
+                                        model = artworkUrlForSong(queuedSong) ?: artworkUrl,
                                         contentDescription = "Queued track album art",
                                         modifier = Modifier.fillMaxSize(),
                                         contentScale = ContentScale.Crop
@@ -1372,10 +1446,10 @@ fun PlayerDetailScreen(
                     modifier = Modifier.size(22.dp)
                 )
             }
-            IconButton(onClick = {}, modifier = Modifier.size(40.dp)) {
+            IconButton(onClick = onAudioOutputClick, modifier = Modifier.size(40.dp)) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                    contentDescription = "Speaker",
+                    contentDescription = "Audio output",
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -1508,6 +1582,8 @@ fun SubScreen(
     currentSongFileName: String?,
     isPlaying: Boolean,
     onBack: () -> Unit,
+    onPlayNext: (Song) -> Unit,
+    onAddToQueue: (Song) -> Unit,
     onTrackClick: (Song) -> Unit
 ) {
     if (album == null || album.songs.isEmpty()) {
@@ -1634,7 +1710,14 @@ fun SubScreen(
                             TrackContextMenu(
                                 expanded = contextMenuSongFileName == song.fileName,
                                 onDismissRequest = { contextMenuSongFileName = null },
-                                onAddToQueue = { contextMenuSongFileName = null }
+                                onPlayNext = {
+                                    onPlayNext(song)
+                                    contextMenuSongFileName = null
+                                },
+                                onAddToQueue = {
+                                    onAddToQueue(song)
+                                    contextMenuSongFileName = null
+                                }
                             )
                         }
                     }
@@ -1702,12 +1785,17 @@ fun PlayingEqualizerBar(
 fun TrackContextMenu(
     expanded: Boolean,
     onDismissRequest: () -> Unit,
+    onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit
 ) {
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismissRequest
     ) {
+        DropdownMenuItem(
+            text = { Text("Play Next") },
+            onClick = onPlayNext
+        )
         DropdownMenuItem(
             text = { Text("Add to Queue") },
             onClick = onAddToQueue
