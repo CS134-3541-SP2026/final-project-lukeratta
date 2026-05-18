@@ -20,6 +20,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -52,11 +53,13 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.DensityMedium
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -1182,6 +1185,7 @@ fun PlayerDetailScreen(
     var draggedTrackFileName by remember { mutableStateOf<String?>(null) }
     var dragFingerY by remember { mutableFloatStateOf(Float.NaN) }
     var settlingTrackFileName by remember { mutableStateOf<String?>(null) }
+    var removingTrackFileNames by remember { mutableStateOf<Set<String>>(emptySet()) }
     val settlingOffsetY = remember { Animatable(0f) }
     val latestVisibleQueueTracks by rememberUpdatedState(visibleQueueTracks)
     val queueScope = rememberCoroutineScope()
@@ -1495,30 +1499,102 @@ fun PlayerDetailScreen(
                             ) { index, queuedSong ->
                                 val isDraggedTrack = draggedTrackFileName == queuedSong.fileName
                                 val isSettlingTrack = settlingTrackFileName == queuedSong.fileName
+                                val isRemovingTrack = queuedSong.fileName in removingTrackFileNames
+                                val canSwipeQueueRows = draggedTrackFileName == null &&
+                                    settlingTrackFileName == null
+                                val dismissState = rememberSwipeToDismissBoxState(
+                                    confirmValueChange = { value ->
+                                        if (
+                                            canSwipeQueueRows &&
+                                            value == SwipeToDismissBoxValue.EndToStart &&
+                                            !isRemovingTrack
+                                        ) {
+                                            removingTrackFileNames += queuedSong.fileName
+                                            queueScope.launch {
+                                                delay(180)
+                                                val updatedQueue = latestVisibleQueueTracks.filterNot {
+                                                    it.fileName == queuedSong.fileName
+                                                }
+                                                visibleQueueTracks = updatedQueue
+                                                removingTrackFileNames -= queuedSong.fileName
+                                                onQueueReorder(updatedQueue)
+                                            }
+                                        }
+                                        false
+                                    }
+                                )
                                 val rowModifier = if (isDraggedTrack) {
                                     Modifier
                                 } else {
                                     Modifier.animateItem()
                                 }
-                                QueueTrackRow(
-                                    song = queuedSong,
-                                    artworkUrl = artworkUrlForSong(queuedSong) ?: artworkUrl,
-                                    modifier = rowModifier
-                                        .zIndex(if (isSettlingTrack) 1f else 0f)
-                                        .alpha(if (isDraggedTrack) 0f else 1f)
-                                        .offset {
-                                            val offsetY = if (isSettlingTrack) {
-                                                settlingOffsetY.value
-                                            } else {
-                                                0f
+                                val removalHeight by animateDpAsState(
+                                    targetValue = if (isRemovingTrack) 0.dp else 60.dp,
+                                    animationSpec = tween(durationMillis = 180),
+                                    label = "queue_remove_height"
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(removalHeight)
+                                        .clipToBounds()
+                                ) {
+                                    SwipeToDismissBox(
+                                        state = dismissState,
+                                        enableDismissFromStartToEnd = false,
+                                        enableDismissFromEndToStart = canSwipeQueueRows,
+                                        backgroundContent = {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .background(
+                                                        if (canSwipeQueueRows) {
+                                                            MaterialTheme.colorScheme.errorContainer
+                                                        } else {
+                                                            Color.Transparent
+                                                        }
+                                                    )
+                                                    .padding(horizontal = 20.dp),
+                                                contentAlignment = Alignment.CenterEnd
+                                            ) {
+                                                if (canSwipeQueueRows) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Delete,
+                                                        contentDescription = "Remove from queue",
+                                                        tint = MaterialTheme.colorScheme.onErrorContainer
+                                                    )
+                                                }
                                             }
-                                            IntOffset(
-                                                x = 0,
-                                                y = offsetY.roundToInt()
+                                        },
+                                        content = {
+                                            QueueTrackRow(
+                                                song = queuedSong,
+                                                artworkUrl = artworkUrlForSong(queuedSong) ?: artworkUrl,
+                                                modifier = rowModifier
+                                                    .zIndex(if (isSettlingTrack) 1f else 0f)
+                                                    .alpha(
+                                                        when {
+                                                            isRemovingTrack -> 0f
+                                                            isDraggedTrack -> 0f
+                                                            else -> 1f
+                                                        }
+                                                    )
+                                                    .offset {
+                                                        val offsetY = if (isSettlingTrack) {
+                                                            settlingOffsetY.value
+                                                        } else {
+                                                            0f
+                                                        }
+                                                        IntOffset(
+                                                            x = 0,
+                                                            y = offsetY.roundToInt()
+                                                        )
+                                                    }
+                                                    .fillMaxWidth()
                                             )
                                         }
-                                        .fillMaxWidth()
-                                )
+                                    )
+                                }
                             }
                         }
 
