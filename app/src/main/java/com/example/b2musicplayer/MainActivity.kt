@@ -20,6 +20,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -92,6 +93,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 enum class LoopMode {
@@ -913,6 +915,33 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 },
+                                onQueueRemove = { queuedSong ->
+                                    val song = state.currentSong
+                                    val currentPlaybackAlbum = state.playbackAlbum
+                                    val currentPlayer = player
+                                    if (song != null && currentPlaybackAlbum != null && currentPlayer != null) {
+                                        val currentIndex = currentPlaybackAlbum.songs.indexOfFirst {
+                                            it.fileName == song.fileName
+                                        }
+                                        if (currentIndex != -1) {
+                                            val removeIndex = currentPlaybackAlbum.songs
+                                                .drop(currentIndex + 1)
+                                                .indexOfFirst { it.fileName == queuedSong.fileName }
+                                                .takeIf { it != -1 }
+                                                ?.let { currentIndex + 1 + it }
+
+                                            if (removeIndex != null) {
+                                                val updatedAlbum = currentPlaybackAlbum.copy(
+                                                    songs = currentPlaybackAlbum.songs.toMutableList().apply {
+                                                        removeAt(removeIndex)
+                                                    }
+                                                )
+                                                state.playbackAlbum = updatedAlbum
+                                                syncUpcomingMediaItems(updatedAlbum, song, currentPlayer)
+                                            }
+                                        }
+                                    }
+                                },
                                 onSeek = { pos -> player?.seekTo(pos) },
                                 onPlayPause = {
                                     if (state.isPlaying) player?.pause() else player?.play()
@@ -1160,6 +1189,7 @@ fun PlayerDetailScreen(
     showQueueView: Boolean,
     onQueueViewChange: (Boolean) -> Unit,
     onQueueReorder: (List<Song>) -> Unit,
+    onQueueRemove: (Song) -> Unit,
     onSeek: (Long) -> Unit,
     onPlayPause: () -> Unit,
     onAudioOutputClick: () -> Unit,
@@ -1181,6 +1211,8 @@ fun PlayerDetailScreen(
     val queueAutoScrollEdgePx = with(density) { 10.dp.toPx() }
     val queueAutoScrollMaxStepPx = with(density) { 15.dp.toPx() }
     val queueHandleTouchWidthPx = with(density) { 56.dp.toPx() }
+    val queueDragSlopPx = with(density) { 8.dp.toPx() }
+    val queueRemoveThresholdPx = with(density) { 96.dp.toPx() }
     var visibleQueueTracks by remember { mutableStateOf(upcomingTracks) }
     var draggedTrackFileName by remember { mutableStateOf<String?>(null) }
     var dragFingerY by remember { mutableFloatStateOf(Float.NaN) }
@@ -1194,6 +1226,14 @@ fun PlayerDetailScreen(
     LaunchedEffect(upcomingTracks, draggedTrackFileName) {
         if (draggedTrackFileName == null) {
             visibleQueueTracks = upcomingTracks
+        }
+    }
+
+    LaunchedEffect(settlingTrackFileName) {
+        val settlingFileName = settlingTrackFileName ?: return@LaunchedEffect
+        delay(320)
+        if (settlingTrackFileName == settlingFileName) {
+            settlingTrackFileName = null
         }
     }
 
@@ -1412,7 +1452,12 @@ fun PlayerDetailScreen(
                             userScrollEnabled = draggedTrackFileName == null,
                             modifier = Modifier
                                 .matchParentSize()
-                                .pointerInput(queueListState, rowHeightPx, queueHandleTouchWidthPx) {
+                                .pointerInput(
+                                    queueListState,
+                                    rowHeightPx,
+                                    queueHandleTouchWidthPx,
+                                    queueDragSlopPx
+                                ) {
                                     awaitEachGesture {
                                         val down = awaitFirstDown(
                                             requireUnconsumed = false,
@@ -1428,30 +1473,76 @@ fun PlayerDetailScreen(
                                             down.position.x >= size.width - queueHandleTouchWidthPx
 
                                         if (isHandlePress) {
-                                            down.consume()
-                                            draggedTrackFileName = pressedTrackFileName
-                                            dragFingerY = down.position.y
+                                            var accumulatedX = 0f
+                                            var accumulatedY = 0f
+                                            var startedReorderDrag = false
+                                            var pointerIsDown = true
 
-                                            do {
+                                            while (pointerIsDown && !startedReorderDrag) {
                                                 val event = awaitPointerEvent(PointerEventPass.Initial)
-                                                var dragY = 0f
+                                                var deltaX = 0f
+                                                var deltaY = 0f
                                                 event.changes.forEach { change ->
                                                     if (change.pressed) {
-                                                        dragY += change.positionChange().y
-                                                        change.consume()
+                                                        val delta = change.positionChange()
+                                                        deltaX += delta.x
+                                                        deltaY += delta.y
                                                     }
                                                 }
+                                                accumulatedX += deltaX
+                                                accumulatedY += deltaY
+                                                pointerIsDown = event.changes.any { it.pressed }
 
-                                                if (dragY != 0f) {
-                                                    if (!dragFingerY.isNaN()) {
-                                                        dragFingerY += dragY
+                                                if (
+                                                    abs(accumulatedX) > queueDragSlopPx ||
+                                                    abs(accumulatedY) > queueDragSlopPx
+                                                ) {
+                                                    if (abs(accumulatedY) >= abs(accumulatedX)) {
+                                                        event.changes.forEach { change ->
+                                                            if (change.pressed) {
+                                                                change.consume()
+                                                            }
+                                                        }
+                                                        startedReorderDrag = true
+                                                    } else {
+                                                        return@awaitEachGesture
                                                     }
-                                                    updateDraggedTrackPlacement(
-                                                        fileName = pressedTrackFileName,
-                                                        fingerY = dragFingerY
-                                                    )
                                                 }
-                                            } while (event.changes.any { it.pressed })
+                                            }
+
+                                            if (!startedReorderDrag) {
+                                                return@awaitEachGesture
+                                            }
+
+                                            draggedTrackFileName = pressedTrackFileName
+                                            dragFingerY = down.position.y + accumulatedY
+                                            updateDraggedTrackPlacement(
+                                                fileName = pressedTrackFileName,
+                                                fingerY = dragFingerY
+                                            )
+
+                                            if (pointerIsDown) {
+                                                do {
+                                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                    var dragY = 0f
+                                                    event.changes.forEach { change ->
+                                                        if (change.pressed) {
+                                                            dragY += change.positionChange().y
+                                                            change.consume()
+                                                        }
+                                                    }
+
+                                                    if (dragY != 0f) {
+                                                        if (!dragFingerY.isNaN()) {
+                                                            dragFingerY += dragY
+                                                        }
+                                                        updateDraggedTrackPlacement(
+                                                            fileName = pressedTrackFileName,
+                                                            fingerY = dragFingerY
+                                                        )
+                                                    }
+                                                } while (event.changes.any { it.pressed })
+                                            }
 
                                             val releasedTrackFileName = draggedTrackFileName
                                             val releasedOffsetY = if (releasedTrackFileName == null) {
@@ -1467,13 +1558,16 @@ fun PlayerDetailScreen(
                                             if (releasedTrackFileName != null && releasedOffsetY != 0f) {
                                                 settlingTrackFileName = releasedTrackFileName
                                                 queueScope.launch {
-                                                    settlingOffsetY.snapTo(releasedOffsetY)
-                                                    settlingOffsetY.animateTo(
-                                                        targetValue = 0f,
-                                                        animationSpec = tween(durationMillis = 160)
-                                                    )
-                                                    if (settlingTrackFileName == releasedTrackFileName) {
-                                                        settlingTrackFileName = null
+                                                    try {
+                                                        settlingOffsetY.snapTo(releasedOffsetY)
+                                                        settlingOffsetY.animateTo(
+                                                            targetValue = 0f,
+                                                            animationSpec = tween(durationMillis = 160)
+                                                        )
+                                                    } finally {
+                                                        if (settlingTrackFileName == releasedTrackFileName) {
+                                                            settlingTrackFileName = null
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1500,30 +1594,44 @@ fun PlayerDetailScreen(
                                 val isDraggedTrack = draggedTrackFileName == queuedSong.fileName
                                 val isSettlingTrack = settlingTrackFileName == queuedSong.fileName
                                 val isRemovingTrack = queuedSong.fileName in removingTrackFileNames
-                                val canSwipeQueueRows = draggedTrackFileName == null &&
-                                    settlingTrackFileName == null
-                                val dismissState = rememberSwipeToDismissBoxState(
-                                    confirmValueChange = { value ->
-                                        if (
-                                            canSwipeQueueRows &&
-                                            value == SwipeToDismissBoxValue.EndToStart &&
-                                            !isRemovingTrack
-                                        ) {
-                                            removingTrackFileNames += queuedSong.fileName
-                                            queueScope.launch {
-                                                delay(180)
-                                                val updatedQueue = latestVisibleQueueTracks.filterNot {
-                                                    it.fileName == queuedSong.fileName
-                                                }
-                                                visibleQueueTracks = updatedQueue
-                                                removingTrackFileNames -= queuedSong.fileName
-                                                onQueueReorder(updatedQueue)
-                                            }
-                                        }
-                                        false
-                                    }
+                                val canSwipeQueueRow = draggedTrackFileName == null &&
+                                    !isSettlingTrack &&
+                                    !isRemovingTrack
+                                var swipeOffsetX by remember(queuedSong.fileName) {
+                                    mutableFloatStateOf(0f)
+                                }
+                                var isSwipeActive by remember(queuedSong.fileName) {
+                                    mutableStateOf(false)
+                                }
+                                val animatedSwipeOffsetX by animateFloatAsState(
+                                    targetValue = swipeOffsetX,
+                                    animationSpec = tween(durationMillis = 120),
+                                    label = "queue_swipe_offset"
                                 )
-                                val rowModifier = if (isDraggedTrack) {
+                                val displayedSwipeOffsetX = if (isSwipeActive) {
+                                    swipeOffsetX
+                                } else {
+                                    animatedSwipeOffsetX
+                                }
+                                fun removeQueuedTrack() {
+                                    if (queuedSong.fileName in removingTrackFileNames) {
+                                        return
+                                    }
+
+                                    isSwipeActive = false
+                                    swipeOffsetX = 0f
+                                    removingTrackFileNames += queuedSong.fileName
+                                    queueScope.launch {
+                                        delay(180)
+                                        val updatedQueue = latestVisibleQueueTracks.filterNot {
+                                            it.fileName == queuedSong.fileName
+                                        }
+                                        visibleQueueTracks = updatedQueue
+                                        removingTrackFileNames -= queuedSong.fileName
+                                        onQueueRemove(queuedSong)
+                                    }
+                                }
+                                val itemModifier = if (isDraggedTrack) {
                                     Modifier
                                 } else {
                                     Modifier.animateItem()
@@ -1534,65 +1642,129 @@ fun PlayerDetailScreen(
                                     label = "queue_remove_height"
                                 )
                                 Box(
-                                    modifier = Modifier
+                                    modifier = itemModifier
                                         .fillMaxWidth()
                                         .height(removalHeight)
                                         .clipToBounds()
                                 ) {
-                                    SwipeToDismissBox(
-                                        state = dismissState,
-                                        enableDismissFromStartToEnd = false,
-                                        enableDismissFromEndToStart = canSwipeQueueRows,
-                                        backgroundContent = {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxSize()
-                                                    .background(
-                                                        if (canSwipeQueueRows) {
-                                                            MaterialTheme.colorScheme.errorContainer
-                                                        } else {
-                                                            Color.Transparent
-                                                        }
-                                                    )
-                                                    .padding(horizontal = 20.dp),
-                                                contentAlignment = Alignment.CenterEnd
-                                            ) {
-                                                if (canSwipeQueueRows) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Delete,
-                                                        contentDescription = "Remove from queue",
-                                                        tint = MaterialTheme.colorScheme.onErrorContainer
-                                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(
+                                                if (displayedSwipeOffsetX < 0f && canSwipeQueueRow) {
+                                                    MaterialTheme.colorScheme.errorContainer
+                                                } else {
+                                                    Color.Transparent
                                                 }
-                                            }
-                                        },
-                                        content = {
-                                            QueueTrackRow(
-                                                song = queuedSong,
-                                                artworkUrl = artworkUrlForSong(queuedSong) ?: artworkUrl,
-                                                modifier = rowModifier
-                                                    .zIndex(if (isSettlingTrack) 1f else 0f)
-                                                    .alpha(
-                                                        when {
-                                                            isRemovingTrack -> 0f
-                                                            isDraggedTrack -> 0f
-                                                            else -> 1f
-                                                        }
-                                                    )
-                                                    .offset {
-                                                        val offsetY = if (isSettlingTrack) {
-                                                            settlingOffsetY.value
-                                                        } else {
-                                                            0f
-                                                        }
-                                                        IntOffset(
-                                                            x = 0,
-                                                            y = offsetY.roundToInt()
-                                                        )
-                                                    }
-                                                    .fillMaxWidth()
+                                            )
+                                                .padding(horizontal = 20.dp),
+                                        contentAlignment = Alignment.CenterEnd
+                                    ) {
+                                        if (displayedSwipeOffsetX < 0f && canSwipeQueueRow) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Remove from queue",
+                                                tint = MaterialTheme.colorScheme.onErrorContainer
                                             )
                                         }
+                                    }
+                                    QueueTrackRow(
+                                        song = queuedSong,
+                                        artworkUrl = artworkUrlForSong(queuedSong) ?: artworkUrl,
+                                        modifier = Modifier
+                                            .zIndex(if (isSettlingTrack) 1f else 0f)
+                                            .alpha(
+                                                when {
+                                                    isRemovingTrack -> 0f
+                                                    isDraggedTrack -> 0f
+                                                    else -> 1f
+                                                }
+                                            )
+                                            .offset {
+                                                val offsetY = if (isSettlingTrack) {
+                                                    settlingOffsetY.value
+                                                } else {
+                                                    0f
+                                                }
+                                                IntOffset(
+                                                    x = displayedSwipeOffsetX.roundToInt(),
+                                                    y = offsetY.roundToInt()
+                                                )
+                                            }
+                                            .fillMaxWidth()
+                                            .pointerInput(
+                                                queuedSong.fileName,
+                                                canSwipeQueueRow,
+                                                queueDragSlopPx,
+                                                queueRemoveThresholdPx
+                                            ) {
+                                                awaitEachGesture {
+                                                    val down = awaitFirstDown(
+                                                        requireUnconsumed = false,
+                                                        pass = PointerEventPass.Main
+                                                    )
+                                                    if (!canSwipeQueueRow) {
+                                                        return@awaitEachGesture
+                                                    }
+
+                                                    var accumulatedX = 0f
+                                                    var accumulatedY = 0f
+                                                    var isHorizontalSwipe = false
+                                                    var pointerIsDown = true
+
+                                                    while (pointerIsDown) {
+                                                        val event = awaitPointerEvent(PointerEventPass.Main)
+                                                        var deltaX = 0f
+                                                        var deltaY = 0f
+                                                        event.changes.forEach { change ->
+                                                            if (change.pressed) {
+                                                                val delta = change.positionChange()
+                                                                deltaX += delta.x
+                                                                deltaY += delta.y
+                                                            }
+                                                        }
+
+                                                        accumulatedX += deltaX
+                                                        accumulatedY += deltaY
+                                                        pointerIsDown = event.changes.any { it.pressed }
+
+                                                        if (!isHorizontalSwipe) {
+                                                            val passedSlop =
+                                                                abs(accumulatedX) > queueDragSlopPx ||
+                                                                    abs(accumulatedY) > queueDragSlopPx
+                                                            if (passedSlop) {
+                                                                if (
+                                                                    accumulatedX < 0f &&
+                                                                    abs(accumulatedX) > abs(accumulatedY)
+                                                                ) {
+                                                                    isHorizontalSwipe = true
+                                                                    isSwipeActive = true
+                                                                } else {
+                                                                    isSwipeActive = false
+                                                                    swipeOffsetX = 0f
+                                                                    return@awaitEachGesture
+                                                                }
+                                                            }
+                                                        }
+
+                                                        if (isHorizontalSwipe) {
+                                                            event.changes.forEach { change ->
+                                                                if (change.pressed) {
+                                                                    change.consume()
+                                                                }
+                                                            }
+                                                            swipeOffsetX = accumulatedX.coerceAtMost(0f)
+                                                        }
+                                                    }
+
+                                                    if (isHorizontalSwipe && -swipeOffsetX >= queueRemoveThresholdPx) {
+                                                        removeQueuedTrack()
+                                                    } else {
+                                                        isSwipeActive = false
+                                                        swipeOffsetX = 0f
+                                                    }
+                                                }
+                                            }
                                     )
                                 }
                             }
