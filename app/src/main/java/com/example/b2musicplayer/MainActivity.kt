@@ -335,6 +335,27 @@ class MainActivity : ComponentActivity() {
                 currentPlayer.prepare()
             }
 
+            fun syncUpcomingMediaItems(album: Album, currentSong: Song, currentPlayer: MediaController) {
+                val currentAlbumIndex = album.songs.indexOfFirst { it.fileName == currentSong.fileName }
+                val currentQueueIndex = currentPlayer.currentMediaItemIndex
+                if (currentAlbumIndex == -1 || currentQueueIndex == -1 || currentPlayer.mediaItemCount == 0) {
+                    return
+                }
+
+                val firstUpcomingQueueIndex = currentQueueIndex + 1
+                if (firstUpcomingQueueIndex < currentPlayer.mediaItemCount) {
+                    currentPlayer.removeMediaItems(firstUpcomingQueueIndex, currentPlayer.mediaItemCount)
+                }
+
+                val upcomingItems = album.songs
+                    .drop(currentAlbumIndex + 1)
+                    .take(3)
+                    .map { queuedSong -> buildMediaItem(queuedSong, album) }
+                if (upcomingItems.isNotEmpty()) {
+                    currentPlayer.addMediaItems(upcomingItems)
+                }
+            }
+
             fun addTrackToPlaybackQueue(song: Song, playNext: Boolean) {
                 val currentSong = state.currentSong ?: return
                 val currentPlaybackAlbum = state.playbackAlbum ?: return
@@ -360,12 +381,7 @@ class MainActivity : ComponentActivity() {
                 val updatedAlbum = currentPlaybackAlbum.copy(songs = updatedQueue)
 
                 state.playbackAlbum = updatedAlbum
-                rebuildPlaybackQueue(
-                    album = updatedAlbum,
-                    song = currentSong,
-                    positionMs = currentPlayer.currentPosition,
-                    resumePlayback = currentPlayer.isPlaying
-                )
+                syncUpcomingMediaItems(updatedAlbum, currentSong, currentPlayer)
             }
 
             fun appendUpcomingTracks(album: Album, currentPlayer: MediaController, currentSong: Song) {
@@ -829,12 +845,7 @@ class MainActivity : ComponentActivity() {
                                                     reorderedUpcomingSongs
                                             )
                                             state.playbackAlbum = reorderedAlbum
-                                            rebuildPlaybackQueue(
-                                                album = reorderedAlbum,
-                                                song = song,
-                                                positionMs = currentPlayer.currentPosition,
-                                                resumePlayback = currentPlayer.isPlaying
-                                            )
+                                            syncUpcomingMediaItems(reorderedAlbum, song, currentPlayer)
                                         }
                                     }
                                 },
