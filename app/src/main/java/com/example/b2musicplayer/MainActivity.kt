@@ -29,6 +29,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -36,6 +37,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
@@ -361,6 +363,10 @@ class MainActivity : ComponentActivity() {
                 val currentSong = state.currentSong ?: return
                 val currentPlaybackAlbum = state.playbackAlbum ?: return
                 val currentPlayer = player ?: return
+                if (song.fileName == currentSong.fileName) {
+                    return
+                }
+
                 val currentIndex = currentPlaybackAlbum.songs.indexOfFirst {
                     it.fileName == currentSong.fileName
                 }
@@ -368,15 +374,21 @@ class MainActivity : ComponentActivity() {
                     return
                 }
 
-                val queueWithoutExistingUpcomingCopy = currentPlaybackAlbum.songs.filterIndexed { index, queuedSong ->
-                    index <= currentIndex || queuedSong.fileName != song.fileName
+                val queueWithoutSelectedTrack = currentPlaybackAlbum.songs.filterIndexed { index, queuedSong ->
+                    index == currentIndex || queuedSong.fileName != song.fileName
+                }
+                val updatedCurrentIndex = queueWithoutSelectedTrack.indexOfFirst {
+                    it.fileName == currentSong.fileName
+                }
+                if (updatedCurrentIndex == -1) {
+                    return
                 }
                 val insertIndex = if (playNext) {
-                    currentIndex + 1
+                    updatedCurrentIndex + 1
                 } else {
-                    queueWithoutExistingUpcomingCopy.size
+                    queueWithoutSelectedTrack.size
                 }
-                val updatedQueue = queueWithoutExistingUpcomingCopy.toMutableList().apply {
+                val updatedQueue = queueWithoutSelectedTrack.toMutableList().apply {
                     add(insertIndex.coerceIn(0, size), song)
                 }
                 val updatedAlbum = currentPlaybackAlbum.copy(songs = updatedQueue)
@@ -703,6 +715,7 @@ class MainActivity : ComponentActivity() {
                                 MainScreen(
                                     albums = state.albumList,
                                     isLoadingAlbums = state.isLoadingAlbums,
+                                    showMiniPlayerPadding = state.currentSong != null,
                                     onRefreshClick = { state.showRefreshConfirmation = true },
                                     onNavigateToSub = { album ->
                                         state.selectedAlbum = album
@@ -715,22 +728,25 @@ class MainActivity : ComponentActivity() {
                                     album = state.selectedAlbum,
                                     currentSongFileName = state.currentSong?.fileName,
                                     isPlaying = state.isPlaying,
+                                    showMiniPlayerPadding = state.currentSong != null,
                                     onBack = { navController.popBackStack() },
                                     onPlayNext = { song -> addTrackToPlaybackQueue(song, playNext = true) },
                                     onAddToQueue = { song -> addTrackToPlaybackQueue(song, playNext = false) },
                                     onTrackClick = { song ->
-                                        state.selectedAlbum?.let { album ->
-                                            val songIndex = album.songs.indexOf(song)
-                                            if (songIndex != -1) {
-                                                val shouldOpenBottomSheet = !state.hasAutoOpenedBottomSheet
-                                                playSongAt(
-                                                    album,
-                                                    songIndex,
-                                                    openBottomSheet = shouldOpenBottomSheet,
-                                                    reshuffleForPlayback = true
-                                                )
-                                                if (shouldOpenBottomSheet) {
-                                                    state.hasAutoOpenedBottomSheet = true
+                                        if (state.currentSong?.fileName != song.fileName) {
+                                            state.selectedAlbum?.let { album ->
+                                                val songIndex = album.songs.indexOf(song)
+                                                if (songIndex != -1) {
+                                                    val shouldOpenBottomSheet = !state.hasAutoOpenedBottomSheet
+                                                    playSongAt(
+                                                        album,
+                                                        songIndex,
+                                                        openBottomSheet = shouldOpenBottomSheet,
+                                                        reshuffleForPlayback = true
+                                                    )
+                                                    if (shouldOpenBottomSheet) {
+                                                        state.hasAutoOpenedBottomSheet = true
+                                                    }
                                                 }
                                             }
                                         }
@@ -1125,6 +1141,7 @@ fun PlayerDetailScreen(
     val settlingOffsetY = remember { Animatable(0f) }
     val latestVisibleQueueTracks by rememberUpdatedState(visibleQueueTracks)
     val queueScope = rememberCoroutineScope()
+    val playerContentScrollState = rememberScrollState()
 
     LaunchedEffect(upcomingTracks, draggedTrackFileName) {
         if (draggedTrackFileName == null) {
@@ -1230,6 +1247,13 @@ fun PlayerDetailScreen(
         modifier = Modifier
             .fillMaxWidth()
             .fillMaxHeight(0.9f)
+            .then(
+                if (showQueueView) {
+                    Modifier
+                } else {
+                    Modifier.verticalScroll(playerContentScrollState)
+                }
+            )
             .padding(horizontal = 32.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.Start
     ) {
@@ -1574,7 +1598,7 @@ fun PlayerDetailScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1603,7 +1627,7 @@ fun PlayerDetailScreen(
                 )
             }
         }
-
+        Spacer(modifier = Modifier.height(12.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1640,7 +1664,7 @@ fun PlayerDetailScreen(
             }
         }
         
-        Spacer(modifier = Modifier.height(48.dp))
+        Spacer(modifier = Modifier.height(8.dp))
     }
 }
 // Formats milliseconds as m:ss for the player progress labels.
@@ -1656,9 +1680,12 @@ private fun formatTime(ms: Long): String {
 fun MainScreen(
     albums: List<Album>,
     isLoadingAlbums: Boolean,
+    showMiniPlayerPadding: Boolean,
     onRefreshClick: () -> Unit,
     onNavigateToSub: (Album) -> Unit
 ) {
+    val bottomPadding = if (showMiniPlayerPadding) 128.dp else 16.dp
+
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -1690,7 +1717,12 @@ fun MainScreen(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 16.dp,
+                    end = 16.dp,
+                    bottom = bottomPadding
+                ),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(albums) { album ->
@@ -1751,6 +1783,7 @@ fun SubScreen(
     album: Album?,
     currentSongFileName: String?,
     isPlaying: Boolean,
+    showMiniPlayerPadding: Boolean,
     onBack: () -> Unit,
     onPlayNext: (Song) -> Unit,
     onAddToQueue: (Song) -> Unit,
@@ -1762,10 +1795,11 @@ fun SubScreen(
         }
     } else {
         var contextMenuSongFileName by remember { mutableStateOf<String?>(null) }
+        val bottomPadding = if (showMiniPlayerPadding) 128.dp else 16.dp
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 16.dp)
+            contentPadding = PaddingValues(bottom = bottomPadding)
         ) {
             item {
                 IconButton(
