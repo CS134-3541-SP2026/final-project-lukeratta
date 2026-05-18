@@ -66,6 +66,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
@@ -1229,9 +1230,14 @@ fun PlayerDetailScreen(
                             key = { _, queuedSong -> queuedSong.fileName }
                         ) { index, queuedSong ->
                             val isDraggedTrack = draggedTrackFileName == queuedSong.fileName
+                            val rowModifier = if (isDraggedTrack) {
+                                Modifier
+                            } else {
+                                Modifier.animateItem()
+                            }
                             Row(
-                                modifier = Modifier
-                                    .animateItem()
+                                modifier = rowModifier
+                                    .zIndex(if (isDraggedTrack) 1f else 0f)
                                     .offset {
                                         IntOffset(
                                             x = 0,
