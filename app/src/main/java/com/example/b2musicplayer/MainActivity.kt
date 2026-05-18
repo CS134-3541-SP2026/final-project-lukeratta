@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.DensityMedium
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -770,7 +771,29 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         ) {
-                            composable("main_screen") {
+                            composable(
+                                route = "main_screen",
+                                exitTransition = {
+                                    slideOutOfContainer(
+                                        towards = if (targetState.destination.route == "settings_screen") {
+                                            AnimatedContentTransitionScope.SlideDirection.Right
+                                        } else {
+                                            AnimatedContentTransitionScope.SlideDirection.Left
+                                        },
+                                        animationSpec = tween(500)
+                                    )
+                                },
+                                popEnterTransition = {
+                                    slideIntoContainer(
+                                        towards = if (initialState.destination.route == "settings_screen") {
+                                            AnimatedContentTransitionScope.SlideDirection.Left
+                                        } else {
+                                            AnimatedContentTransitionScope.SlideDirection.Right
+                                        },
+                                        animationSpec = tween(500)
+                                    )
+                                }
+                            ) {
                                 MainScreen(
                                     albums = state.albumList,
                                     isLoadingAlbums = state.isLoadingAlbums,
@@ -2204,11 +2227,11 @@ fun SettingsScreen(
         ) {
             IconButton(
                 onClick = onBack,
-                modifier = Modifier.align(Alignment.CenterStart)
+                modifier = Modifier.align(Alignment.CenterEnd)
             ) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back to library"
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close settings"
                 )
             }
             Text(
@@ -2287,140 +2310,143 @@ fun SubScreen(
         var contextMenuSongFileName by remember { mutableStateOf<String?>(null) }
         val bottomPadding = if (showMiniPlayerPadding) 128.dp else 16.dp
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = bottomPadding)
-        ) {
-            item {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier.padding(start = 8.dp, top = 16.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back to albums"
-                    )
-                }
-            }
-
-            // Large album artwork/title area above the track list.
-            item {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp, bottom = 24.dp, start = 24.dp, end = 24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Surface(
-                        modifier = Modifier.size(240.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant
-                    ) {
-                        AsyncImage(
-                            model = album.artworkUrl,
-                            contentDescription = "Album Cover",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text(
-                        text = album.albumTitle,
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-
-            // Numbered tracks; clicking a row starts playback for that song.
-            itemsIndexed(album.songs) { index, song ->
-                val isCurrentSong = song.fileName == currentSongFileName
-                val rowBackground = if (isCurrentSong) {
-                    MaterialTheme.colorScheme.primaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surface
-                }
-                val rowContentColor = if (isCurrentSong) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                }
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(rowBackground)
-                        .combinedClickable(
-                            onClick = { onTrackClick(song) },
-                            onLongClick = { contextMenuSongFileName = song.fileName }
-                        )
-                ) {
-                    Row(
+        Box(modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = bottomPadding)
+            ) {
+                // Large album artwork/title area above the track list.
+                item {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 12.dp, horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(top = 72.dp, bottom = 24.dp, start = 24.dp, end = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Box(
-                            modifier = Modifier.width(36.dp),
-                            contentAlignment = Alignment.CenterStart
+                        Surface(
+                            modifier = Modifier.size(240.dp),
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant
                         ) {
-                            if (isCurrentSong) {
-                                PlayingEqualizerIcon(
-                                    isPlaying = isPlaying,
-                                    color = rowContentColor.copy(alpha = 0.9f),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            } else {
-                                Text(
-                                    text = "${index + 1}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = rowContentColor.copy(alpha = 0.5f)
-                                )
-                            }
-                        }
-                        Text(
-                            text = song.title,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.weight(1f),
-                            color = rowContentColor,
-                            fontWeight = if (isCurrentSong) FontWeight.Bold else FontWeight.Normal
-                        )
-                        Box {
-                            IconButton(
-                                onClick = { contextMenuSongFileName = song.fileName },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.MoreHoriz,
-                                    contentDescription = "Track options",
-                                    tint = rowContentColor.copy(alpha = if (isCurrentSong) 0.9f else 0.5f),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                            TrackContextMenu(
-                                expanded = contextMenuSongFileName == song.fileName,
-                                onDismissRequest = { contextMenuSongFileName = null },
-                                onPlayNext = {
-                                    onPlayNext(song)
-                                    contextMenuSongFileName = null
-                                },
-                                onAddToQueue = {
-                                    onAddToQueue(song)
-                                    contextMenuSongFileName = null
-                                }
+                            AsyncImage(
+                                model = album.artworkUrl,
+                                contentDescription = "Album Cover",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
                             )
                         }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Text(
+                            text = album.albumTitle,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
                     }
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 52.dp, end = 16.dp),
-                        thickness = 0.5.dp,
-                        color = rowContentColor.copy(alpha = if (isCurrentSong) 0.2f else 0.1f)
-                    )
                 }
+
+                // Numbered tracks; clicking a row starts playback for that song.
+                itemsIndexed(album.songs) { index, song ->
+                    val isCurrentSong = song.fileName == currentSongFileName
+                    val rowBackground = if (isCurrentSong) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surface
+                    }
+                    val rowContentColor = if (isCurrentSong) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(rowBackground)
+                            .combinedClickable(
+                                onClick = { onTrackClick(song) },
+                                onLongClick = { contextMenuSongFileName = song.fileName }
+                            )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 12.dp, horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier.width(36.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                if (isCurrentSong) {
+                                    PlayingEqualizerIcon(
+                                        isPlaying = isPlaying,
+                                        color = rowContentColor.copy(alpha = 0.9f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                } else {
+                                    Text(
+                                        text = "${index + 1}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = rowContentColor.copy(alpha = 0.5f)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = song.title,
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.weight(1f),
+                                color = rowContentColor,
+                                fontWeight = if (isCurrentSong) FontWeight.Bold else FontWeight.Normal
+                            )
+                            Box {
+                                IconButton(
+                                    onClick = { contextMenuSongFileName = song.fileName },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.MoreHoriz,
+                                        contentDescription = "Track options",
+                                        tint = rowContentColor.copy(alpha = if (isCurrentSong) 0.9f else 0.5f),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                TrackContextMenu(
+                                    expanded = contextMenuSongFileName == song.fileName,
+                                    onDismissRequest = { contextMenuSongFileName = null },
+                                    onPlayNext = {
+                                        onPlayNext(song)
+                                        contextMenuSongFileName = null
+                                    },
+                                    onAddToQueue = {
+                                        onAddToQueue(song)
+                                        contextMenuSongFileName = null
+                                    }
+                                )
+                            }
+                        }
+                        HorizontalDivider(
+                            modifier = Modifier.padding(start = 52.dp, end = 16.dp),
+                            thickness = 0.5.dp,
+                            color = rowContentColor.copy(alpha = if (isCurrentSong) 0.2f else 0.1f)
+                        )
+                    }
+                }
+            }
+
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 8.dp, top = 16.dp)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.92f), CircleShape)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back to albums"
+                )
             }
         }
     }
