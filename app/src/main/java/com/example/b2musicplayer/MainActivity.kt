@@ -34,6 +34,9 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -55,6 +58,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.DensityMedium
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -110,6 +114,11 @@ enum class LoopMode {
     }
 }
 
+enum class AlbumLayout {
+    LIST,
+    GRID
+}
+
 // Holds Compose-observed UI and playback state across configuration changes.
 class MainUiState : ViewModel() {
     var authStatusMessage by mutableStateOf<String?>(null)
@@ -135,6 +144,7 @@ class MainUiState : ViewModel() {
     var loopMode by mutableStateOf(LoopMode.OFF)
     var shuffleEnabled by mutableStateOf(false)
     var showPlayerQueue by mutableStateOf(false)
+    var albumLayout by mutableStateOf(AlbumLayout.LIST)
 }
 
 class MainActivity : ComponentActivity() {
@@ -765,11 +775,46 @@ class MainActivity : ComponentActivity() {
                                     albums = state.albumList,
                                     isLoadingAlbums = state.isLoadingAlbums,
                                     showMiniPlayerPadding = state.currentSong != null,
+                                    albumLayout = state.albumLayout,
+                                    onSettingsClick = { navController.navigate("settings_screen") },
                                     onRefreshClick = { state.showRefreshConfirmation = true },
                                     onNavigateToSub = { album ->
                                         state.selectedAlbum = album
                                         navController.navigate("sub_screen")
                                     }
+                                )
+                            }
+                            composable(
+                                route = "settings_screen",
+                                enterTransition = {
+                                    slideIntoContainer(
+                                        towards = AnimatedContentTransitionScope.SlideDirection.Right,
+                                        animationSpec = tween(500)
+                                    )
+                                },
+                                exitTransition = {
+                                    slideOutOfContainer(
+                                        towards = AnimatedContentTransitionScope.SlideDirection.Left,
+                                        animationSpec = tween(500)
+                                    )
+                                },
+                                popEnterTransition = {
+                                    slideIntoContainer(
+                                        towards = AnimatedContentTransitionScope.SlideDirection.Left,
+                                        animationSpec = tween(500)
+                                    )
+                                },
+                                popExitTransition = {
+                                    slideOutOfContainer(
+                                        towards = AnimatedContentTransitionScope.SlideDirection.Left,
+                                        animationSpec = tween(500)
+                                    )
+                                }
+                            ) {
+                                SettingsScreen(
+                                    albumLayout = state.albumLayout,
+                                    onAlbumLayoutChange = { state.albumLayout = it },
+                                    onBack = { navController.popBackStack() }
                                 )
                             }
                             composable("sub_screen") {
@@ -1973,32 +2018,46 @@ fun MainScreen(
     albums: List<Album>,
     isLoadingAlbums: Boolean,
     showMiniPlayerPadding: Boolean,
+    albumLayout: AlbumLayout,
+    onSettingsClick: () -> Unit,
     onRefreshClick: () -> Unit,
     onNavigateToSub: (Album) -> Unit
 ) {
     val bottomPadding = if (showMiniPlayerPadding) 128.dp else 16.dp
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, top = 16.dp, end = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(start = 8.dp, top = 16.dp, end = 8.dp, bottom = 8.dp)
         ) {
+            IconButton(
+                onClick = onSettingsClick,
+                modifier = Modifier.align(Alignment.CenterStart)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Settings"
+                )
+            }
             Text(
                 text = "Library",
                 style = MaterialTheme.typography.headlineLarge,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.align(Alignment.Center),
+                textAlign = TextAlign.Center,
                 fontWeight = FontWeight.Bold
             )
-            IconButton(onClick = onRefreshClick) {
+            IconButton(
+                onClick = onRefreshClick,
+                modifier = Modifier.align(Alignment.CenterEnd)
+            ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
                     contentDescription = "Refresh albums from B2"
                 )
             }
         }
-        
+
         if (albums.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
@@ -2006,19 +2065,38 @@ fun MainScreen(
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
-        } else {
+        } else if (albumLayout == AlbumLayout.LIST) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
                     start = 16.dp,
-                    top = 16.dp,
+                    top = 8.dp,
                     end = 16.dp,
                     bottom = bottomPadding
                 ),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(albums) { album ->
-                    AlbumItem(
+                    AlbumListItem(
+                        album = album,
+                        onClick = { onNavigateToSub(album) }
+                    )
+                }
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    top = 8.dp,
+                    end = 16.dp,
+                    bottom = bottomPadding
+                ),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                gridItems(albums) { album ->
+                    AlbumGridItem(
                         album = album,
                         onClick = { onNavigateToSub(album) }
                     )
@@ -2030,16 +2108,16 @@ fun MainScreen(
 
 // Single album row used by the main album list.
 @Composable
-fun AlbumItem(album: Album, onClick: () -> Unit) {
-    Card(
+fun AlbumListItem(album: Album, onClick: () -> Unit) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
     ) {
         Row(
-            modifier = Modifier.padding(12.dp).fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
@@ -2065,6 +2143,126 @@ fun AlbumItem(album: Album, onClick: () -> Unit) {
                     )
                 }
             }
+        }
+        HorizontalDivider(
+            modifier = Modifier.padding(start = 76.dp),
+            thickness = 0.5.dp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+        )
+    }
+}
+
+@Composable
+fun AlbumGridItem(album: Album, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            AsyncImage(
+                model = album.artworkUrl,
+                contentDescription = "Album Cover",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = album.albumTitle,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2
+        )
+        Text(
+            text = "${album.songs.size} Songs",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+fun SettingsScreen(
+    albumLayout: AlbumLayout,
+    onAlbumLayoutChange: (AlbumLayout) -> Unit,
+    onBack: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 8.dp, top = 16.dp, end = 16.dp, bottom = 8.dp)
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.align(Alignment.CenterStart)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back to library"
+                )
+            }
+            Text(
+                text = "Settings",
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Album Layout",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val listSelected = albumLayout == AlbumLayout.LIST
+                    val gridSelected = albumLayout == AlbumLayout.GRID
+                    if (listSelected) {
+                        Button(onClick = { onAlbumLayoutChange(AlbumLayout.LIST) }) {
+                            Text("List")
+                        }
+                    } else {
+                        OutlinedButton(onClick = { onAlbumLayoutChange(AlbumLayout.LIST) }) {
+                            Text("List")
+                        }
+                    }
+                    if (gridSelected) {
+                        Button(onClick = { onAlbumLayoutChange(AlbumLayout.GRID) }) {
+                            Text("Grid")
+                        }
+                    } else {
+                        OutlinedButton(onClick = { onAlbumLayoutChange(AlbumLayout.GRID) }) {
+                            Text("Grid")
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+            )
         }
     }
 }
